@@ -112,25 +112,50 @@ class ContentExtractor:
         Follow tracking redirects to find the real URL.
 
         Tries HEAD first (faster), falls back to GET if HEAD fails.
+        Uses browser for domains that block HTTP clients.
 
         Returns:
             Tuple of (resolved_url, error_or_none)
         """
+        # Try browser first for known blocked domains
+        if self._browser and needs_browser(url):
+            try:
+                return self._browser.resolve_url(url)
+            except Exception:
+                pass  # Fall through to HTTP
+
+        resolved = None
         try:
             resp = self._client.head(url)
-            return str(resp.url), None
+            if resp.status_code < 400:
+                resolved = str(resp.url)
         except httpx.HTTPError:
             pass
 
-        # Fallback to GET
-        try:
-            resp = self._client.get(url)
-            return str(resp.url), None
-        except httpx.HTTPError as exc:
-            # Browser fallback for known domains
-            if self._browser and needs_browser(url):
+        if not resolved:
+            try:
+                resp = self._client.get(url)
+                if resp.status_code < 400:
+                    resolved = str(resp.url)
+            except httpx.HTTPError:
+                pass
+
+        if resolved:
+            # If resolved URL is still on a tracking domain, try browser
+            if self._browser and needs_browser(resolved):
+                try:
+                    return self._browser.resolve_url(url)
+                except Exception:
+                    pass
+            return resolved, None
+
+        # Everything failed
+        if self._browser and needs_browser(url):
+            try:
                 return self._browser.resolve_url(url)
-            return url, f"redirect_failed: {exc}"
+            except Exception as exc:
+                return url, f"redirect_failed: {exc}"
+        return url, "redirect_failed: HTTP 403 or blocked"
 
     # ── Article extraction ────────────────────────────────────────
 
