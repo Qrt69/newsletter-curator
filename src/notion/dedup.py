@@ -6,6 +6,7 @@ in-memory index for fast duplicate detection.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,7 +15,10 @@ from rapidfuzz import fuzz
 
 from .client import DATABASES, NotionClient
 
-CACHE_FILE = Path(".dedup_cache.json")
+
+def _cache_file() -> Path:
+    data_dir = os.environ.get("DATA_DIR", ".")
+    return Path(data_dir) / ".dedup_cache.json"
 
 
 def _normalize_url(raw_url: str | None) -> str | None:
@@ -107,9 +111,10 @@ class DedupIndex:
 
     def load(self) -> None:
         """Load index from cache file, or build fresh if no cache exists."""
-        if CACHE_FILE.exists():
-            print(f"Loading dedup index from {CACHE_FILE}...")
-            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        cache_file = _cache_file()
+        if cache_file.exists():
+            print(f"Loading dedup index from {cache_file}...")
+            with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._entries = data["entries"]
             self._rebuild_url_map()
@@ -214,13 +219,14 @@ class DedupIndex:
 
     def _save_cache(self) -> None:
         """Save the current index to the cache file."""
+        cache_file = _cache_file()
         data = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "entries": self._entries,
         }
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"Cache saved to {CACHE_FILE}")
+        print(f"Cache saved to {cache_file}")
 
     def _rebuild_url_map(self) -> None:
         """Rebuild the URL lookup map from the entries list."""

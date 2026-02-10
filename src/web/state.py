@@ -18,7 +18,7 @@ DATABASE_OPTIONS: list[str] = sorted(set(ROUTING_TABLE.values()))
 
 def _get_store() -> DigestStore:
     """Create a fresh DigestStore connection (thread-safe)."""
-    return DigestStore("digest.db")
+    return DigestStore()
 
 
 class DigestState(rx.State):

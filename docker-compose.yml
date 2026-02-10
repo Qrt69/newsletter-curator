@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      - app-data:/data
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
+    env_file: .env
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      - app-data:/data
+    restart: unless-stopped
+
+volumes:
+  app-data:

@@ -22,7 +22,11 @@ from bs4 import BeautifulSoup
 # Domains that need browser-based fetching
 BROWSER_DOMAINS = {"medium.com", "beehiiv.com"}
 
-_DEFAULT_STATE_PATH = ".browser_state.json"
+
+def _default_state_path() -> str:
+    data_dir = os.environ.get("DATA_DIR", ".")
+    return str(Path(data_dir) / ".browser_state.json")
+
 _SESSION_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 _MAGIC_LINK_TIMEOUT = 120  # seconds to wait for magic link email
 _MAGIC_LINK_POLL_INTERVAL = 5  # seconds between inbox polls
@@ -54,8 +58,8 @@ class BrowserFetcher:
         fetcher.close()
     """
 
-    def __init__(self, state_path: str = _DEFAULT_STATE_PATH):
-        self._state_path = state_path
+    def __init__(self, state_path: str | None = None):
+        self._state_path = state_path or _default_state_path()
         self._playwright = None
         self._browser = None
 
@@ -160,9 +164,11 @@ class BrowserSession:
     def __init__(
         self,
         email_fetcher,
-        state_path: str = _DEFAULT_STATE_PATH,
+        state_path: str | None = None,
         medium_email: str | None = None,
     ):
+        if state_path is None:
+            state_path = _default_state_path()
         self._fetcher = email_fetcher
         self.state_path = state_path
         self._medium_email = (
@@ -328,7 +334,7 @@ class BrowserSession:
         return None
 
 
-async def manual_login(state_path: str = _DEFAULT_STATE_PATH):
+async def manual_login(state_path: str | None = None):
     """
     Open a visible browser for manual Medium login.
 
@@ -338,6 +344,8 @@ async def manual_login(state_path: str = _DEFAULT_STATE_PATH):
     Usage:
         uv run python scripts/run_weekly.py --browser-login
     """
+    if state_path is None:
+        state_path = _default_state_path()
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:

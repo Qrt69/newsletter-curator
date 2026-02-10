@@ -1,0 +1,15 @@
+.web/
+__pycache__/
+*.pyc
+.env
+*.db
+.git/
+tests/
+.idea/
+.claude/
+nul
+.dedup_cache.json
+.browser_state.json
+.venv/
+.pytest_cache/
+newsletter_curator/

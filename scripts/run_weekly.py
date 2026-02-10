@@ -40,7 +40,8 @@ from src.notion.dedup import DedupIndex
 from src.notion.writer import NotionWriter
 from src.storage.digest import DigestStore
 
-DB_PATH = "digest.db"
+import os
+DB_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "digest.db")
 
 
 async def run_pipeline():

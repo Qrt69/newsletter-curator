@@ -6,8 +6,10 @@ entries waiting for review), and feedback history for learning over time.
 """
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 _SCHEMA = """
@@ -95,7 +97,10 @@ class DigestStore:
         store.finish_run(run_id, stats)
     """
 
-    def __init__(self, db_path: str = "digest.db"):
+    def __init__(self, db_path: str | None = None):
+        if db_path is None:
+            data_dir = os.environ.get("DATA_DIR", ".")
+            db_path = str(Path(data_dir) / "digest.db")
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
