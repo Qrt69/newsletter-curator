@@ -232,8 +232,8 @@ async def _run_pipeline_inner():
     print(f"  Moved {moved}/{len(emails)} emails")
 
 
-def write_accepted(run_id: int):
-    """Write all accepted items for a run to Notion."""
+def write_accepted(run_id: int) -> dict:
+    """Write all accepted items for a run to Notion. Returns result summary."""
     print(f"Writing accepted items for run {run_id}...")
     nc = NotionClient()
     store = DigestStore(DB_PATH)
@@ -245,6 +245,7 @@ def write_accepted(run_id: int):
     if result["errors"]:
         for err in result["errors"]:
             print(f"    - {err}")
+    return result
 
 
 def start_scheduler():

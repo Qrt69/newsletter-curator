@@ -106,7 +106,6 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
-        self.check_write_status()
         store = _get_store()
         self.runs = store.get_runs()
         self._load_rule_proposals()
@@ -137,35 +136,34 @@ class DigestState(rx.State):
         self.show_all_items = checked
         self._load_items()
 
-    def write_to_notion(self) -> None:
-        """Write accepted items for the selected run to Notion."""
+    def write_to_notion(self):
+        """Write accepted items for the selected run to Notion (generator for live updates)."""
         if self.selected_run_id == 0 or self.writing_to_notion:
             return
 
         self.writing_to_notion = True
         self.write_status = "Writing..."
-        run_id = self.selected_run_id
+        yield
 
-        def _write_in_thread():
-            import sys
-            from pathlib import Path
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-            from scripts.run_weekly import write_accepted
-            write_accepted(run_id)
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.run_weekly import write_accepted
 
-        t = threading.Thread(target=_write_in_thread, daemon=True)
-        t.start()
+        try:
+            result = write_accepted(self.selected_run_id)
+            created = result.get("created", 0) if isinstance(result, dict) else 0
+            failed = result.get("failed", 0) if isinstance(result, dict) else 0
+            if failed:
+                self.write_status = f"Done: {created} created, {failed} failed"
+            else:
+                self.write_status = f"Written to Notion! ({created} items)"
+        except Exception as exc:
+            self.write_status = f"Error: {exc}"
 
-    def check_write_status(self) -> None:
-        """Check if the Notion write is done (no more unwritten accepted items)."""
-        if not self.writing_to_notion:
-            return
-        store = _get_store()
-        remaining = store.get_accepted_items(self.selected_run_id)
-        if not remaining:
-            self.writing_to_notion = False
-            self.write_status = "Written to Notion!"
-            self._update_accepted_count()
+        self.writing_to_notion = False
+        self._update_accepted_count()
+        yield
 
     def _update_accepted_count(self) -> None:
         """Count accepted items not yet written to Notion."""
