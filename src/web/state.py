@@ -56,6 +56,11 @@ class DigestState(rx.State):
     pipeline_running: bool = False
     pipeline_status: str = ""
 
+    # Notion write
+    writing_to_notion: bool = False
+    write_status: str = ""
+    accepted_count: int = 0
+
     def _check_lock_file(self) -> bool:
         """Check if the pipeline lock file exists."""
         data_dir = os.environ.get("DATA_DIR", ".")
@@ -101,6 +106,7 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
+        self.check_write_status()
         store = _get_store()
         self.runs = store.get_runs()
         self._load_rule_proposals()
@@ -131,12 +137,51 @@ class DigestState(rx.State):
         self.show_all_items = checked
         self._load_items()
 
+    def write_to_notion(self) -> None:
+        """Write accepted items for the selected run to Notion."""
+        if self.selected_run_id == 0 or self.writing_to_notion:
+            return
+
+        self.writing_to_notion = True
+        self.write_status = "Writing..."
+        run_id = self.selected_run_id
+
+        def _write_in_thread():
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+            from scripts.run_weekly import write_accepted
+            write_accepted(run_id)
+
+        t = threading.Thread(target=_write_in_thread, daemon=True)
+        t.start()
+
+    def check_write_status(self) -> None:
+        """Check if the Notion write is done (no more unwritten accepted items)."""
+        if not self.writing_to_notion:
+            return
+        store = _get_store()
+        remaining = store.get_accepted_items(self.selected_run_id)
+        if not remaining:
+            self.writing_to_notion = False
+            self.write_status = "Written to Notion!"
+            self._update_accepted_count()
+
+    def _update_accepted_count(self) -> None:
+        """Count accepted items not yet written to Notion."""
+        if self.selected_run_id == 0:
+            self.accepted_count = 0
+            return
+        store = _get_store()
+        self.accepted_count = len(store.get_accepted_items(self.selected_run_id))
+
     def _load_items(self) -> None:
         """Load items for the selected run."""
         if self.selected_run_id == 0:
             self.items = []
             self.pending_count = 0
             self.total_count = 0
+            self.accepted_count = 0
             return
         store = _get_store()
         all_items = store.get_items(self.selected_run_id)
@@ -155,6 +200,7 @@ class DigestState(rx.State):
                 and i.get("user_decision") is None
             ]
         self.pending_count = len(self.items)
+        self._update_accepted_count()
 
     def open_detail(self, item_id: int) -> None:
         """Open the detail dialog for an item."""

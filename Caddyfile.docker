@@ -2,7 +2,7 @@
 
 encode gzip
 
-@backend_routes path /_event/* /ping /_upload /_upload/* /api/pipeline/*
+@backend_routes path /_event/* /ping /_upload /_upload/* /api/pipeline/* /api/notion/*
 handle @backend_routes {
 	reverse_proxy localhost:8000
 }

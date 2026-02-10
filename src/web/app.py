@@ -427,6 +427,45 @@ def index() -> rx.Component:
                 margin_bottom="16px",
             ),
 
+            # Write to Notion bar
+            rx.cond(
+                DigestState.accepted_count > 0,
+                rx.hstack(
+                    rx.cond(
+                        DigestState.writing_to_notion,
+                        rx.button(
+                            rx.spinner(size="1"),
+                            "Writing...",
+                            size="2",
+                            variant="soft",
+                            disabled=True,
+                        ),
+                        rx.button(
+                            "Write "
+                            + DigestState.accepted_count.to(str)
+                            + " accepted to Notion",
+                            size="2",
+                            variant="solid",
+                            color_scheme="green",
+                            on_click=DigestState.write_to_notion,
+                        ),
+                    ),
+                    rx.cond(
+                        DigestState.write_status,
+                        rx.text(
+                            DigestState.write_status,
+                            size="2",
+                            color="gray",
+                        ),
+                        rx.fragment(),
+                    ),
+                    align="center",
+                    spacing="3",
+                    margin_bottom="16px",
+                ),
+                rx.fragment(),
+            ),
+
             # Items table or empty state
             rx.cond(
                 DigestState.pending_count > 0,
@@ -505,9 +544,32 @@ async def _api_pipeline_status(request):
     })
 
 
+async def _api_write_notion(request):
+    """Write accepted items to Notion for a given run."""
+    from ..storage.digest import DigestStore
+    run_id = request.query_params.get("run_id")
+    if not run_id:
+        return JSONResponse({"error": "run_id parameter required"}, status_code=400)
+    run_id = int(run_id)
+    store = DigestStore()
+    accepted = store.get_accepted_items(run_id)
+    if not accepted:
+        return JSONResponse({"status": "nothing_to_write", "count": 0})
+
+    def _write():
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.run_weekly import write_accepted
+        write_accepted(run_id)
+
+    t = threading.Thread(target=_write, daemon=True)
+    t.start()
+    return JSONResponse({"status": "started", "count": len(accepted)})
+
+
 _custom_api = Starlette(routes=[
     Route("/api/pipeline/trigger", _api_pipeline_trigger, methods=["GET"]),
     Route("/api/pipeline/status", _api_pipeline_status, methods=["GET"]),
+    Route("/api/notion/write", _api_write_notion, methods=["GET"]),
 ])
 
 app = rx.App(api_transformer=_custom_api)
