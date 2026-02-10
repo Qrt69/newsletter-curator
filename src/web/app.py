@@ -401,10 +401,27 @@ def index() -> rx.Component:
             # Rule proposals (from feedback analysis)
             rule_proposals_section(),
 
-            # Run selector
+            # Run selector + filter toggle
             rx.hstack(
                 rx.text("Processing Run:", weight="medium", size="3"),
                 run_selector(),
+                rx.spacer(),
+                rx.hstack(
+                    rx.switch(
+                        checked=DigestState.show_all_items,
+                        on_change=DigestState.toggle_show_all,
+                        size="1",
+                    ),
+                    rx.text(
+                        "Show all ("
+                        + DigestState.total_count.to(str)
+                        + " items)",
+                        size="2",
+                        color="gray",
+                    ),
+                    align="center",
+                    spacing="2",
+                ),
                 align="center",
                 spacing="3",
                 margin_bottom="16px",

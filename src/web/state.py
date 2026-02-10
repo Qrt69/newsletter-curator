@@ -36,6 +36,8 @@ class DigestState(rx.State):
     # Items for current run
     items: list[dict] = []
     pending_count: int = 0
+    show_all_items: bool = False
+    total_count: int = 0
 
     # Detail dialog
     show_detail: bool = False
@@ -124,20 +126,34 @@ class DigestState(rx.State):
         self.selected_run_id = int(value)
         self._load_items()
 
+    def toggle_show_all(self, checked: bool) -> None:
+        """Toggle between showing only proposed items and all items."""
+        self.show_all_items = checked
+        self._load_items()
+
     def _load_items(self) -> None:
-        """Load pending items for the selected run."""
+        """Load items for the selected run."""
         if self.selected_run_id == 0:
             self.items = []
             self.pending_count = 0
+            self.total_count = 0
             return
         store = _get_store()
-        # Show propose + review items that haven't been decided yet
         all_items = store.get_items(self.selected_run_id)
-        self.items = [
-            i for i in all_items
-            if i.get("action") in ("propose", "review")
-            and i.get("user_decision") is None
-        ]
+        self.total_count = len(all_items)
+        if self.show_all_items:
+            # Show all undecided items (including skipped)
+            self.items = [
+                i for i in all_items
+                if i.get("user_decision") is None
+            ]
+        else:
+            # Show only propose + review items that haven't been decided yet
+            self.items = [
+                i for i in all_items
+                if i.get("action") in ("propose", "review")
+                and i.get("user_decision") is None
+            ]
         self.pending_count = len(self.items)
 
     def open_detail(self, item_id: int) -> None:
