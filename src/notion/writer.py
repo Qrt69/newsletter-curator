@@ -5,7 +5,9 @@ Creates or updates Notion pages for accepted digest items,
 then records the page ID back in the digest database.
 """
 
-from .client import NotionClient, title, rich_text, select, multi_select, url
+from datetime import date as date_today
+
+from .client import NotionClient, title, rich_text, select, multi_select, url, date
 
 
 def _base(item, name_field="Name"):
@@ -51,6 +53,7 @@ def _build_overview(item):
     _add(props, "Core Idea", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Description", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     _add(props, "Source URL", url(item["url"]) if item.get("url") else None)
+    _add(props, "Date Added", date(date_today.today().isoformat()))
     return props
 
 
@@ -90,6 +93,7 @@ def _build_articles_reads(item):
     _add(props, "Source", select(item["email_sender"]) if item.get("email_sender") else None)
     _add(props, "Short Summary", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Why it matters", rich_text(item["reasoning"]) if item.get("reasoning") else None)
+    _add(props, "Date found", date(date_today.today().isoformat()))
     return props
 
 

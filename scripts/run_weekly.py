@@ -137,7 +137,7 @@ async def _run_pipeline_inner():
             item["_email_meta"] = {
                 "email_id": email["id"],
                 "email_subject": email["subject"],
-                "email_sender": email["sender"],
+                "email_sender": email.get("sender_name") or email["sender"],
             }
         all_items.extend(items)
     extractor.close()

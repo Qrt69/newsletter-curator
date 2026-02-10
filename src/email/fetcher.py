@@ -326,8 +326,10 @@ class EmailFetcher:
     def _extract_message(msg) -> dict:
         """Convert a Graph Message object to a clean dict."""
         sender = ""
+        sender_name = ""
         if msg.from_ and msg.from_.email_address:
             sender = msg.from_.email_address.address or ""
+            sender_name = msg.from_.email_address.name or ""
 
         body_html = ""
         if msg.body and msg.body.content:
@@ -341,6 +343,7 @@ class EmailFetcher:
             "id": msg.id,
             "subject": msg.subject or "",
             "sender": sender,
+            "sender_name": sender_name,
             "received_at": received_at,
             "body_html": body_html,
         }
