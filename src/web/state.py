@@ -8,6 +8,7 @@ Event handlers load data from SQLite, handle accept/reject/edit.
 import asyncio
 import os
 import threading
+import time
 
 import reflex as rx
 
@@ -83,8 +84,8 @@ class DigestState(rx.State):
         if self.selected_run_id:
             self._load_items()
 
-    def trigger_pipeline(self) -> None:
-        """Start the pipeline in a background thread."""
+    def trigger_pipeline(self):
+        """Start the pipeline in a background thread and poll until done."""
         if self._check_lock_file():
             self.pipeline_status = "Pipeline already running"
             self.pipeline_running = True
@@ -92,6 +93,7 @@ class DigestState(rx.State):
 
         self.pipeline_running = True
         self.pipeline_status = "Running..."
+        yield
 
         def _run_in_thread():
             import sys
@@ -102,6 +104,16 @@ class DigestState(rx.State):
 
         t = threading.Thread(target=_run_in_thread, daemon=True)
         t.start()
+
+        # Poll lock file every 3 seconds until pipeline finishes
+        while t.is_alive():
+            time.sleep(3)
+            yield
+
+        self.pipeline_running = False
+        self.pipeline_status = "Complete!"
+        self._reload_runs()
+        yield
 
     def load_runs(self) -> None:
         """Load all runs from the database."""
@@ -185,7 +197,8 @@ class DigestState(rx.State):
             return
         store = _get_store()
         all_items = store.get_items(self.selected_run_id)
-        self.total_count = len(all_items)
+        undecided = [i for i in all_items if i.get("user_decision") is None]
+        self.total_count = len(undecided)
         if self.show_all_items:
             # Show all undecided items (including skipped)
             self.items = [
