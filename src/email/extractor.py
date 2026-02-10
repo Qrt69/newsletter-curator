@@ -5,7 +5,9 @@ Parses newsletter email HTML to find article links, resolves tracking
 redirects, and extracts article text via trafilatura.
 """
 
+import concurrent.futures
 import re
+import threading
 from urllib.parse import urlparse
 
 import httpx
@@ -59,6 +61,7 @@ class ContentExtractor:
             headers={"User-Agent": ua},
         )
         self._browser = browser_fetcher
+        self._browser_lock = threading.Lock()
 
     # ── Link parsing ──────────────────────────────────────────────
 
@@ -120,7 +123,8 @@ class ContentExtractor:
         # Try browser first for known blocked domains
         if self._browser and needs_browser(url):
             try:
-                return self._browser.resolve_url(url)
+                with self._browser_lock:
+                    return self._browser.resolve_url(url)
             except Exception:
                 pass  # Fall through to HTTP
 
@@ -144,7 +148,8 @@ class ContentExtractor:
             # If resolved URL is still on a tracking domain, try browser
             if self._browser and needs_browser(resolved):
                 try:
-                    return self._browser.resolve_url(url)
+                    with self._browser_lock:
+                        return self._browser.resolve_url(url)
                 except Exception:
                     pass
             return resolved, None
@@ -152,7 +157,8 @@ class ContentExtractor:
         # Everything failed
         if self._browser and needs_browser(url):
             try:
-                return self._browser.resolve_url(url)
+                with self._browser_lock:
+                    return self._browser.resolve_url(url)
             except Exception as exc:
                 return url, f"redirect_failed: {exc}"
         return url, "redirect_failed: HTTP 403 or blocked"
@@ -186,7 +192,8 @@ class ContentExtractor:
         except httpx.HTTPError as exc:
             # Browser fallback for known domains
             if self._browser and needs_browser(url):
-                html, browser_error = self._browser.fetch_page(url)
+                with self._browser_lock:
+                    html, browser_error = self._browser.fetch_page(url)
                 if browser_error or not html:
                     return {
                         **base,
@@ -235,9 +242,49 @@ class ContentExtractor:
 
     # ── Full pipeline ─────────────────────────────────────────────
 
+    def _process_link(self, link: dict) -> dict:
+        """
+        Process a single link: resolve tracking redirect and extract article.
+
+        Args:
+            link: Dict with keys url, link_text.
+
+        Returns:
+            Dict with source_url, resolved_url, link_text, and article fields.
+        """
+        source_url = link["url"]
+        link_text = link["link_text"]
+
+        resolved_url, resolve_error = self.resolve_url(source_url)
+
+        if resolve_error:
+            return {
+                "source_url": source_url,
+                "resolved_url": resolved_url,
+                "link_text": link_text,
+                "title": None,
+                "author": None,
+                "date": None,
+                "description": None,
+                "text": None,
+                "sitename": None,
+                "hostname": urlparse(resolved_url).hostname,
+                "extraction_status": "redirect_failed",
+                "error": resolve_error,
+                "text_length": 0,
+            }
+
+        article = self.extract_article(resolved_url)
+        return {
+            "source_url": source_url,
+            "resolved_url": resolved_url,
+            "link_text": link_text,
+            **article,
+        }
+
     def extract_from_email(self, body_html: str) -> list[dict]:
         """
-        Full extraction pipeline: parse links -> resolve -> dedupe -> extract.
+        Full extraction pipeline: parse links -> resolve + extract in parallel -> dedupe.
 
         Args:
             body_html: The HTML body of a newsletter email.
@@ -246,47 +293,23 @@ class ContentExtractor:
             List of dicts per link (see module docstring for structure).
         """
         raw_links = self.parse_links(body_html)
+
+        if not raw_links:
+            return []
+
+        # Process all links in parallel (I/O-bound HTTP requests)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(self._process_link, raw_links))
+
+        # Post-resolution dedup (multiple tracking URLs may resolve to the same article)
         items = []
         seen_resolved = set()
-
-        for link in raw_links:
-            source_url = link["url"]
-            link_text = link["link_text"]
-
-            # Resolve tracking redirects
-            resolved_url, resolve_error = self.resolve_url(source_url)
-
-            # Dedupe on resolved URL
+        for result in results:
+            resolved_url = result["resolved_url"]
             if resolved_url in seen_resolved:
                 continue
             seen_resolved.add(resolved_url)
-
-            if resolve_error:
-                items.append({
-                    "source_url": source_url,
-                    "resolved_url": resolved_url,
-                    "link_text": link_text,
-                    "title": None,
-                    "author": None,
-                    "date": None,
-                    "description": None,
-                    "text": None,
-                    "sitename": None,
-                    "hostname": urlparse(resolved_url).hostname,
-                    "extraction_status": "redirect_failed",
-                    "error": resolve_error,
-                    "text_length": 0,
-                })
-                continue
-
-            # Extract article content
-            article = self.extract_article(resolved_url)
-            items.append({
-                "source_url": source_url,
-                "resolved_url": resolved_url,
-                "link_text": link_text,
-                **article,
-            })
+            items.append(result)
 
         return items
 
