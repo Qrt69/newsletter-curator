@@ -114,6 +114,10 @@ class DigestState(rx.State):
             self.pipeline_running = False
             self.pipeline_status = "Complete!"
             self._reload_runs()
+            # Auto-select the newest run
+            if self.runs:
+                self.selected_run_id = self.runs[0]["id"]
+                self._load_items()
 
     def load_runs(self) -> None:
         """Load all runs from the database."""
