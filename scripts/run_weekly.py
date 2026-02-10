@@ -41,11 +41,63 @@ from src.notion.writer import NotionWriter
 from src.storage.digest import DigestStore
 
 import os
-DB_PATH = os.path.join(os.environ.get("DATA_DIR", "."), "digest.db")
+import time
+
+DATA_DIR = os.environ.get("DATA_DIR", ".")
+DB_PATH = os.path.join(DATA_DIR, "digest.db")
+LOCK_FILE = os.path.join(DATA_DIR, ".pipeline_running")
+LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
+
+
+def is_pipeline_locked() -> bool:
+    """Check if the pipeline lock file exists and is not stale."""
+    if not os.path.exists(LOCK_FILE):
+        return False
+    try:
+        age = time.time() - os.path.getmtime(LOCK_FILE)
+        if age > LOCK_STALE_SECONDS:
+            print(f"  Stale lock file detected ({age:.0f}s old), removing.")
+            os.remove(LOCK_FILE)
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_lock() -> bool:
+    """Create the lock file. Returns False if already locked."""
+    if is_pipeline_locked():
+        return False
+    try:
+        with open(LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+        return True
+    except OSError:
+        return False
+
+
+def _release_lock():
+    """Remove the lock file."""
+    try:
+        os.remove(LOCK_FILE)
+    except OSError:
+        pass
 
 
 async def run_pipeline():
     """Run the full ingest pipeline once."""
+    if not _acquire_lock():
+        print("Pipeline is already running. Skipping.")
+        return
+
+    try:
+        await _run_pipeline_inner()
+    finally:
+        _release_lock()
+
+
+async def _run_pipeline_inner():
+    """Inner pipeline logic (called with lock held)."""
     print("=" * 60)
     print("Newsletter Curator - Pipeline Run")
     print("=" * 60)

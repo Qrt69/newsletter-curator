@@ -5,6 +5,10 @@ DigestState holds the list of runs and items.
 Event handlers load data from SQLite, handle accept/reject/edit.
 """
 
+import asyncio
+import os
+import threading
+
 import reflex as rx
 
 from ..storage.digest import DigestStore
@@ -46,8 +50,55 @@ class DigestState(rx.State):
     # Rule proposals from feedback analysis
     rule_proposals: list[dict] = []
 
+    # Pipeline trigger
+    pipeline_running: bool = False
+    pipeline_status: str = ""
+
+    def _check_lock_file(self) -> bool:
+        """Check if the pipeline lock file exists."""
+        data_dir = os.environ.get("DATA_DIR", ".")
+        lock_path = os.path.join(data_dir, ".pipeline_running")
+        return os.path.exists(lock_path)
+
+    def check_pipeline_status(self) -> None:
+        """Check if pipeline is still running (via lock file)."""
+        was_running = self.pipeline_running
+        self.pipeline_running = self._check_lock_file()
+        if was_running and not self.pipeline_running:
+            self.pipeline_status = "Complete!"
+            self._reload_runs()
+
+    def _reload_runs(self) -> None:
+        """Reload runs list without resetting selected run."""
+        store = _get_store()
+        self.runs = store.get_runs()
+        self._load_rule_proposals()
+        if self.selected_run_id:
+            self._load_items()
+
+    def trigger_pipeline(self) -> None:
+        """Start the pipeline in a background thread."""
+        if self._check_lock_file():
+            self.pipeline_status = "Pipeline already running"
+            self.pipeline_running = True
+            return
+
+        self.pipeline_running = True
+        self.pipeline_status = "Running..."
+
+        def _run_in_thread():
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+            from scripts.run_weekly import run_pipeline
+            asyncio.run(run_pipeline())
+
+        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t.start()
+
     def load_runs(self) -> None:
         """Load all runs from the database."""
+        self.check_pipeline_status()
         store = _get_store()
         self.runs = store.get_runs()
         self._load_rule_proposals()

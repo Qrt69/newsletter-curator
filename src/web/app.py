@@ -4,7 +4,16 @@ Reflex web app for the Newsletter Curator review UI.
 Single page with run selector, items table, and detail dialog.
 """
 
+import asyncio
+import os
+import sys
+import threading
+from pathlib import Path
+
 import reflex as rx
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
 
 from .state import DigestState, DATABASE_OPTIONS
 
@@ -347,11 +356,41 @@ def index() -> rx.Component:
             rx.hstack(
                 rx.heading("Newsletter Curator", size="6"),
                 rx.spacer(),
-                rx.badge(
-                    DigestState.pending_count.to(str) + " pending",
-                    color_scheme="blue",
-                    variant="solid",
-                    size="2",
+                rx.hstack(
+                    rx.cond(
+                        DigestState.pipeline_status,
+                        rx.text(
+                            DigestState.pipeline_status,
+                            size="2",
+                            color="gray",
+                        ),
+                        rx.fragment(),
+                    ),
+                    rx.cond(
+                        DigestState.pipeline_running,
+                        rx.button(
+                            rx.spinner(size="1"),
+                            "Running...",
+                            size="2",
+                            variant="soft",
+                            disabled=True,
+                        ),
+                        rx.button(
+                            "Run Pipeline",
+                            size="2",
+                            variant="solid",
+                            color_scheme="purple",
+                            on_click=DigestState.trigger_pipeline,
+                        ),
+                    ),
+                    rx.badge(
+                        DigestState.pending_count.to(str) + " pending",
+                        color_scheme="blue",
+                        variant="solid",
+                        size="2",
+                    ),
+                    align="center",
+                    spacing="3",
                 ),
                 align="center",
                 padding_y="16px",
@@ -396,4 +435,62 @@ def index() -> rx.Component:
     )
 
 
-app = rx.App()
+# ── API endpoints for curl access ────────────────────────────
+
+_DATA_DIR = os.environ.get("DATA_DIR", ".")
+_LOCK_FILE = os.path.join(_DATA_DIR, ".pipeline_running")
+_LOCK_STALE_SECONDS = 30 * 60
+
+
+def _is_locked() -> bool:
+    """Check if the pipeline lock file exists and is not stale."""
+    if not os.path.exists(_LOCK_FILE):
+        return False
+    import time
+    try:
+        age = time.time() - os.path.getmtime(_LOCK_FILE)
+        if age > _LOCK_STALE_SECONDS:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _start_pipeline_thread():
+    """Start the pipeline in a background thread."""
+    def _run():
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.run_weekly import run_pipeline
+        asyncio.run(run_pipeline())
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
+async def _api_pipeline_trigger(request):
+    """Trigger the pipeline via HTTP."""
+    if _is_locked():
+        return JSONResponse({"status": "already_running"})
+    _start_pipeline_thread()
+    return JSONResponse({"status": "started"})
+
+
+async def _api_pipeline_status(request):
+    """Check pipeline status via HTTP."""
+    from ..storage.digest import DigestStore
+    running = _is_locked()
+    store = DigestStore()
+    runs = store.get_runs()
+    last_run = runs[0] if runs else None
+    return JSONResponse({
+        "running": running,
+        "last_run": last_run,
+    })
+
+
+_custom_api = Starlette(routes=[
+    Route("/api/pipeline/trigger", _api_pipeline_trigger, methods=["GET"]),
+    Route("/api/pipeline/status", _api_pipeline_status, methods=["GET"]),
+])
+
+app = rx.App(api_transformer=_custom_api)
