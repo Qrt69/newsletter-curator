@@ -406,6 +406,17 @@ def index() -> rx.Component:
                 rx.text("Processing Run:", weight="medium", size="3"),
                 run_selector(),
                 rx.spacer(),
+                rx.cond(
+                    DigestState.pending_count > 0,
+                    rx.button(
+                        "Dismiss All",
+                        size="1",
+                        variant="soft",
+                        color_scheme="red",
+                        on_click=DigestState.dismiss_all,
+                    ),
+                    rx.fragment(),
+                ),
                 rx.hstack(
                     rx.switch(
                         checked=DigestState.show_all_items,
@@ -566,10 +577,24 @@ async def _api_write_notion(request):
     return JSONResponse({"status": "started", "count": len(accepted)})
 
 
+async def _api_cleanup(request):
+    """Delete old rejected/skipped items from the database."""
+    from ..storage.digest import DigestStore
+    days = request.query_params.get("days", "30")
+    try:
+        days = int(days)
+    except ValueError:
+        return JSONResponse({"error": "days must be an integer"}, status_code=400)
+    store = DigestStore()
+    deleted = store.cleanup_old_items(days=days)
+    return JSONResponse({"deleted": deleted})
+
+
 _custom_api = Starlette(routes=[
     Route("/api/pipeline/trigger", _api_pipeline_trigger, methods=["GET"]),
     Route("/api/pipeline/status", _api_pipeline_status, methods=["GET"]),
     Route("/api/notion/write", _api_write_notion, methods=["GET"]),
+    Route("/api/cleanup", _api_cleanup, methods=["GET"]),
 ])
 
 app = rx.App(api_transformer=_custom_api)

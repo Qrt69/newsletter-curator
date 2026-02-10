@@ -107,6 +107,8 @@ class DigestState(rx.State):
         """Load all runs from the database."""
         self.check_pipeline_status()
         store = _get_store()
+        # Silent cleanup of old rejected/skipped items on page load
+        store.cleanup_old_items()
         self.runs = store.get_runs()
         self._load_rule_proposals()
         if self.runs and self.selected_run_id == 0:
@@ -276,4 +278,12 @@ class DigestState(rx.State):
         """Reject directly from the table."""
         store = _get_store()
         store.set_decision(item_id, "rejected")
+        self._load_items()
+
+    def dismiss_all(self) -> None:
+        """Bulk-dismiss all undecided items in the selected run."""
+        if self.selected_run_id == 0:
+            return
+        store = _get_store()
+        store.dismiss_undecided(self.selected_run_id)
         self._load_items()

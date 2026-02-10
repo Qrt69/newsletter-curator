@@ -357,6 +357,70 @@ class DigestStore:
         )
         self._conn.commit()
 
+    def dismiss_undecided(self, run_id: int) -> int:
+        """
+        Bulk-dismiss all undecided items in a run by marking them as rejected.
+
+        No feedback rows are created — these are bulk dismissals, not individual
+        review decisions, so they shouldn't influence the scorer learning loop.
+
+        Returns:
+            Number of items dismissed.
+        """
+        now = _now()
+        cur = self._conn.execute(
+            """UPDATE items SET user_decision = 'rejected', decided_at = ?
+               WHERE run_id = ? AND user_decision IS NULL""",
+            (now, run_id),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def cleanup_old_items(self, days: int = 30) -> int:
+        """
+        Delete old rejected/skipped items and their feedback rows.
+
+        Removes items where:
+        - user_decision = 'rejected' AND decided_at < cutoff, OR
+        - action = 'skip' AND created_at < cutoff
+
+        Feedback rows are deleted first (FK constraint).
+
+        Returns:
+            Number of items deleted.
+        """
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        # Find item IDs to delete
+        rows = self._conn.execute(
+            """SELECT id FROM items
+               WHERE (user_decision = 'rejected' AND decided_at < ?)
+                  OR (action = 'skip' AND created_at < ?)""",
+            (cutoff, cutoff),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        item_ids = [r[0] for r in rows]
+        placeholders = ",".join("?" * len(item_ids))
+
+        # Delete feedback first (FK constraint)
+        self._conn.execute(
+            f"DELETE FROM feedback WHERE item_id IN ({placeholders})",
+            item_ids,
+        )
+
+        # Delete items
+        self._conn.execute(
+            f"DELETE FROM items WHERE id IN ({placeholders})",
+            item_ids,
+        )
+
+        self._conn.commit()
+        return len(item_ids)
+
     def get_feedback(self, limit: int = 50) -> list[dict]:
         """Recent feedback entries, newest first."""
         rows = self._conn.execute(
