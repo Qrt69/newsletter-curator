@@ -84,16 +84,17 @@ class DigestState(rx.State):
         if self.selected_run_id:
             self._load_items()
 
-    def trigger_pipeline(self):
+    @rx.event(background=True)
+    async def trigger_pipeline(self):
         """Start the pipeline in a background thread and poll until done."""
-        if self._check_lock_file():
-            self.pipeline_status = "Pipeline already running"
-            self.pipeline_running = True
-            return
+        async with self:
+            if self._check_lock_file():
+                self.pipeline_status = "Pipeline already running"
+                self.pipeline_running = True
+                return
 
-        self.pipeline_running = True
-        self.pipeline_status = "Running..."
-        yield
+            self.pipeline_running = True
+            self.pipeline_status = "Running..."
 
         def _run_in_thread():
             import sys
@@ -107,13 +108,12 @@ class DigestState(rx.State):
 
         # Poll lock file every 3 seconds until pipeline finishes
         while t.is_alive():
-            time.sleep(3)
-            yield
+            await asyncio.sleep(3)
 
-        self.pipeline_running = False
-        self.pipeline_status = "Complete!"
-        self._reload_runs()
-        yield
+        async with self:
+            self.pipeline_running = False
+            self.pipeline_status = "Complete!"
+            self._reload_runs()
 
     def load_runs(self) -> None:
         """Load all runs from the database."""

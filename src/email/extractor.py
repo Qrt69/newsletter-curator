@@ -350,4 +350,7 @@ class ContentExtractor:
         """Close the httpx client session and browser if active."""
         self._client.close()
         if self._browser:
-            self._browser.close()
+            try:
+                self._browser.close()
+            except Exception:
+                pass  # Playwright greenlet may be on a dead thread
