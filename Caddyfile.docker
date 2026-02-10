@@ -7,8 +7,8 @@ handle @backend_routes {
 	reverse_proxy localhost:8000
 }
 
-root * /srv
-route {
+handle {
+	root * /srv
 	try_files {path} {path}/ /index.html
 	file_server
 }
