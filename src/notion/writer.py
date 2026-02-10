@@ -22,7 +22,7 @@ def _add(props, key, value):
 
 def _build_python_libraries(item):
     props = _base(item)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
     _add(props, "Short Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Primary Use", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     return props
@@ -37,8 +37,8 @@ def _build_duckdb_extensions(item):
 
 def _build_taaft(item):
     props = _base(item)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
-    _add(props, "Type", select(item["item_type"]) if item.get("item_type") else None)
+    _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Type", rich_text(item["item_type"]) if item.get("item_type") else None)
     _add(props, "Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Source URL", url(item["url"]) if item.get("url") else None)
     return props
@@ -46,8 +46,8 @@ def _build_taaft(item):
 
 def _build_overview(item):
     props = _base(item)
-    _add(props, "Type", select(item["item_type"]) if item.get("item_type") else None)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Type", rich_text(item["item_type"]) if item.get("item_type") else None)
+    _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
     _add(props, "Core Idea", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Description", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     _add(props, "Source URL", url(item["url"]) if item.get("url") else None)
@@ -56,12 +56,12 @@ def _build_overview(item):
 
 def _build_model_information(item):
     props = _base(item)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
-    _add(props, "Type", select(item["item_type"]) if item.get("item_type") else None)
+    _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Type", rich_text(item["item_type"]) if item.get("item_type") else None)
     _add(props, "Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Why It Matters", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     _add(props, "Source URL", url(item["url"]) if item.get("url") else None)
-    _add(props, "Tags", multi_select(item["tags"]) if item.get("tags") else None)
+    _add(props, "Tags", rich_text(", ".join(item["tags"])) if item.get("tags") else None)
     return props
 
 
@@ -76,7 +76,7 @@ def _build_platforms_infrastructure(item):
 def _build_topics_concepts(item):
     props = _base(item)
     _add(props, "Type", select(item["item_type"]) if item.get("item_type") else None)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Category", multi_select([item["suggested_category"]]) if item.get("suggested_category") else None)
     _add(props, "Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Tags", multi_select(item["tags"]) if item.get("tags") else None)
     _add(props, "Summary", rich_text(item["reasoning"]) if item.get("reasoning") else None)
@@ -87,7 +87,7 @@ def _build_articles_reads(item):
     props = _base(item)
     _add(props, "URL", url(item["url"]) if item.get("url") else None)
     _add(props, "Tags", multi_select(item["tags"]) if item.get("tags") else None)
-    _add(props, "Source", rich_text(item["email_sender"]) if item.get("email_sender") else None)
+    _add(props, "Source", select(item["email_sender"]) if item.get("email_sender") else None)
     _add(props, "Short Summary", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Why it matters", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     return props
@@ -104,7 +104,7 @@ def _build_books_papers(item):
 
 def _build_ai_agents_coding_tools(item):
     props = _base(item)
-    _add(props, "Category", select(item["suggested_category"]) if item.get("suggested_category") else None)
+    _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
     _add(props, "Short Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Primary Use", rich_text(item["reasoning"]) if item.get("reasoning") else None)
     return props
