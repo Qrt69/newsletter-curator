@@ -8,6 +8,8 @@ profile, producing a score, verdict, item type, and reasoning.
 import json
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 
@@ -52,7 +54,8 @@ class Scorer:
         self._max_retries = max_retries
         self._feedback_examples = feedback_examples
 
-        # Token usage tracking
+        # Token usage tracking (guarded by _lock for thread safety)
+        self._lock = threading.Lock()
         self._total_input_tokens = 0
         self._total_output_tokens = 0
         self._items_scored = 0
@@ -89,15 +92,16 @@ class Scorer:
                     messages=[{"role": "user", "content": user_prompt}],
                 )
 
-                # Track token usage
-                self._total_input_tokens += response.usage.input_tokens
-                self._total_output_tokens += response.usage.output_tokens
-
                 raw_text = response.content[0].text
                 result = self._parse_response(raw_text)
                 result["url"] = url
                 result["link_text"] = link_text
-                self._items_scored += 1
+
+                # Track token usage (thread-safe)
+                with self._lock:
+                    self._total_input_tokens += response.usage.input_tokens
+                    self._total_output_tokens += response.usage.output_tokens
+                    self._items_scored += 1
                 return result
 
             except (json.JSONDecodeError, KeyError, IndexError) as exc:
@@ -108,33 +112,37 @@ class Scorer:
                 last_error = str(exc)
                 break
 
-        self._errors += 1
+        with self._lock:
+            self._errors += 1
         return self._error_result(item, f"scoring failed after retries: {last_error}")
 
-    def score_batch(self, items: list[dict]) -> list[dict]:
+    def score_batch(self, items: list[dict], max_workers: int = 4) -> list[dict]:
         """
-        Score a list of items sequentially with progress output.
+        Score a list of items in parallel with progress output.
 
         Args:
             items: List of dicts from ContentExtractor.
+            max_workers: Number of concurrent scoring threads (default 4).
 
         Returns:
-            List of scored dicts.
+            List of scored dicts (same order as input).
         """
-        results = []
         total = len(items)
 
-        for i, item in enumerate(items, 1):
+        def _score_one(args: tuple[int, dict]) -> dict:
+            i, item = args
             link_text = item.get("link_text", "?")[:40]
-            # Encode for Windows cp1252 safety
             link_text = link_text.encode("ascii", errors="replace").decode("ascii")
             print(f"  [{i}/{total}] Scoring: {link_text}")
 
             result = self.score_item(item)
             verdict = result.get("verdict", "?")
             score = result.get("score", "?")
-            print(f"           -> {verdict} (score: {score})")
-            results.append(result)
+            print(f"  [{i}/{total}] -> {verdict} (score: {score})")
+            return result
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(_score_one, enumerate(items, 1)))
 
         return results
 

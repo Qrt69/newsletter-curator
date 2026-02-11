@@ -8,6 +8,7 @@ in-memory index for fast duplicate detection.
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -57,59 +58,63 @@ class DedupIndex:
         self._entries: list[dict] = []
         self._url_map: dict[str, list[int]] = {}  # normalized_url → entry indices
 
-    def build(self) -> None:
-        """Fetch all entries from all 14 databases and build the index."""
+    def build(self, max_workers: int = 6) -> None:
+        """Fetch all entries from all 14 databases in parallel and build the index."""
         self._entries = []
         self._url_map = {}
 
         db_names = list(DATABASES.keys())
         total = len(db_names)
-        print("Building dedup index...")
+        print(f"Building dedup index ({total} databases, {max_workers} workers)...")
 
-        for i, db_name in enumerate(db_names, 1):
-            # Discover the title and url property names from the schema
-            schema = self._client.get_database_schema(db_name)
-            title_prop = None
-            url_prop = None
-            for prop_name, prop_type in schema.items():
-                if prop_type == "title":
-                    title_prop = prop_name
-                if prop_type == "url" and url_prop is None:
-                    url_prop = prop_name
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(self._fetch_database, db_names))
 
-            if not title_prop:
-                print(f"  [{i}/{total}] {db_name}: skipped (no title property)")
-                continue
-
-            pages = self._client.query_database(db_name)
-            count = 0
-            for page in pages:
-                name = page.get(title_prop, "")
-                if not name:
-                    continue
-                raw_url = page.get(url_prop) if url_prop else None
-                normalized = _normalize_url(raw_url)
-
-                entry = {
-                    "id": page["id"],
-                    "name": name,
-                    "name_lower": name.lower(),
-                    "url": raw_url,
-                    "url_normalized": normalized,
-                    "database": db_name,
-                }
+        # Merge results sequentially (single-threaded, no lock needed)
+        for db_name, entries in zip(db_names, results):
+            count = len(entries)
+            for entry in entries:
                 idx = len(self._entries)
                 self._entries.append(entry)
-
+                normalized = entry.get("url_normalized")
                 if normalized:
                     self._url_map.setdefault(normalized, []).append(idx)
-
-                count += 1
-
-            print(f"  [{i}/{total}] {db_name}: {count} entries")
+            print(f"  {db_name}: {count} entries")
 
         print(f"Index built: {len(self._entries)} entries from {total} databases.")
         self._save_cache()
+
+    def _fetch_database(self, db_name: str) -> list[dict]:
+        """Fetch all entries from a single Notion database. Thread-safe (read-only)."""
+        schema = self._client.get_database_schema(db_name)
+        title_prop = None
+        url_prop = None
+        for prop_name, prop_type in schema.items():
+            if prop_type == "title":
+                title_prop = prop_name
+            if prop_type == "url" and url_prop is None:
+                url_prop = prop_name
+
+        if not title_prop:
+            return []
+
+        pages = self._client.query_database(db_name)
+        entries = []
+        for page in pages:
+            name = page.get(title_prop, "")
+            if not name:
+                continue
+            raw_url = page.get(url_prop) if url_prop else None
+            normalized = _normalize_url(raw_url)
+            entries.append({
+                "id": page["id"],
+                "name": name,
+                "name_lower": name.lower(),
+                "url": raw_url,
+                "url_normalized": normalized,
+                "database": db_name,
+            })
+        return entries
 
     def load(self) -> None:
         """Load index from cache file, or build fresh if cache is missing or stale."""
