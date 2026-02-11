@@ -197,6 +197,11 @@ class Scorer:
             "tags": data.get("tags", []),
             "is_listicle": bool(data.get("is_listicle", False)),
             "listicle_item_type": data.get("listicle_item_type"),
+            "pillar": data.get("pillar", ""),
+            "overlap": data.get("overlap", ""),
+            "relevance": data.get("relevance", ""),
+            "usefulness": data.get("usefulness", ""),
+            "usefulness_notes": data.get("usefulness_notes", ""),
         }
 
     @staticmethod
@@ -216,4 +221,9 @@ class Scorer:
             "link_text": item.get("link_text", ""),
             "is_listicle": False,
             "listicle_item_type": None,
+            "pillar": "",
+            "overlap": "",
+            "relevance": "",
+            "usefulness": "",
+            "usefulness_notes": "",
         }

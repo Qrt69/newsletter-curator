@@ -64,6 +64,19 @@ interest profile and return a structured JSON response.
 - article: An article, blog post, or tutorial
 - book_paper: A book, research paper, or long-form publication
 
+### Python library extra fields (only when item_type = "python_library")
+When you classify an item as python_library, also fill these additional fields:
+- "pillar": assign to one of these 5 pillars:
+  - "Core Python" (utilities, CLI, testing, packaging)
+  - "Data science" (pandas, polars, visualization, data processing)
+  - "AI/ML/NLP" (pytorch, transformers, LLM tools, NLP)
+  - "UI/Apps" (streamlit, reflex, nicegui, web frameworks)
+  - "Infrastructure" (airflow, dagster, orchestration, deployment)
+- "overlap": name similar/competing libraries (e.g. "Similar to requests; async alternative to aiohttp")
+- "relevance": 1 sentence on why this matters for Kurt's projects
+- "usefulness": "High", "Medium", or "Low"
+- "usefulness_notes": brief note on practical use
+
 ## Response format
 
 Return ONLY valid JSON (no markdown fences, no extra text) with these fields:
@@ -78,7 +91,12 @@ Return ONLY valid JSON (no markdown fences, no extra text) with these fields:
     "suggested_category": "<e.g. 'Data Validation', 'LLM Framework', 'Vector Database'>",
     "tags": ["<2-5 relevant tags>"],
     "is_listicle": false,
-    "listicle_item_type": null
+    "listicle_item_type": null,
+    "pillar": null,
+    "overlap": null,
+    "relevance": null,
+    "usefulness": null,
+    "usefulness_notes": null
 }
 
 ### Listicle detection

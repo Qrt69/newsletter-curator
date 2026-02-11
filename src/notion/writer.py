@@ -22,11 +22,27 @@ def _add(props, key, value):
     return props
 
 
+def _learning_priority(score: int) -> str:
+    """Derive Learning Priority from score: 5+=High, 3-4=Medium, else Low."""
+    if score >= 5:
+        return "High"
+    elif score >= 3:
+        return "Medium"
+    return "Low"
+
+
 def _build_python_libraries(item):
     props = _base(item)
     _add(props, "Category", rich_text(item["suggested_category"]) if item.get("suggested_category") else None)
     _add(props, "Short Description", rich_text(item["description"]) if item.get("description") else None)
     _add(props, "Primary Use", rich_text(item["reasoning"]) if item.get("reasoning") else None)
+    _add(props, "Pillar", rich_text(item["pillar"]) if item.get("pillar") else None)
+    _add(props, "Overlaps / Alternatives", rich_text(item["overlap"]) if item.get("overlap") else None)
+    _add(props, "Relevance", rich_text(item["relevance"]) if item.get("relevance") else None)
+    _add(props, "Reason", rich_text(item["reasoning"]) if item.get("reasoning") else None)
+    _add(props, "Learning Priority", select(_learning_priority(item.get("score", 0))))
+    _add(props, "Usefulness (High/Medium/Low)", rich_text(item["usefulness"]) if item.get("usefulness") else None)
+    _add(props, "Usefulness Notes", rich_text(item["usefulness_notes"]) if item.get("usefulness_notes") else None)
     return props
 
 

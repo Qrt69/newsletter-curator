@@ -15,6 +15,8 @@ from rapidfuzz import fuzz
 
 from .client import DATABASES, NotionClient
 
+_CACHE_MAX_AGE = 24 * 60 * 60  # 24 hours
+
 
 def _cache_file() -> Path:
     data_dir = os.environ.get("DATA_DIR", ".")
@@ -110,16 +112,21 @@ class DedupIndex:
         self._save_cache()
 
     def load(self) -> None:
-        """Load index from cache file, or build fresh if no cache exists."""
+        """Load index from cache file, or build fresh if cache is missing or stale."""
         cache_file = _cache_file()
         if cache_file.exists():
-            print(f"Loading dedup index from {cache_file}...")
-            with open(cache_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self._entries = data["entries"]
-            self._rebuild_url_map()
-            print(f"Loaded {len(self._entries)} entries from cache "
-                  f"(built {data.get('timestamp', 'unknown')}).")
+            age = time.time() - cache_file.stat().st_mtime
+            if age < _CACHE_MAX_AGE:
+                print(f"Loading dedup index from {cache_file}...")
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._entries = data["entries"]
+                self._rebuild_url_map()
+                print(f"Loaded {len(self._entries)} entries from cache "
+                      f"(built {data.get('timestamp', 'unknown')}).")
+            else:
+                print(f"Cache expired ({age / 3600:.1f}h old), rebuilding...")
+                self.build()
         else:
             self.build()
 
