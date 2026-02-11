@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS items (
     suggested_category  TEXT,
     tags                TEXT,
 
+    -- Python library extra fields (from scorer)
+    pillar              TEXT,
+    overlap             TEXT,
+    relevance           TEXT,
+    usefulness          TEXT,
+    usefulness_notes    TEXT,
+
     -- Router output
     target_database     TEXT,
     dedup_status        TEXT,
@@ -109,11 +116,13 @@ class DigestStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
-        # Migrate: add source_article column if missing (for existing DBs)
-        try:
-            self._conn.execute("ALTER TABLE items ADD COLUMN source_article TEXT")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
+        # Migrate: add columns if missing (for existing DBs)
+        for col in ("source_article", "pillar", "overlap", "relevance",
+                     "usefulness", "usefulness_notes"):
+            try:
+                self._conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         self._conn.commit()
 
     # ── Runs ────────────────────────────────────────────────────
@@ -188,9 +197,10 @@ class DigestStore:
                 url, link_text, title, author, text,
                 score, verdict, item_type, description, reasoning, signals,
                 suggested_name, suggested_category, tags,
+                pillar, overlap, relevance, usefulness, usefulness_notes,
                 target_database, dedup_status, dedup_matches, action,
                 source_article
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 _now(),
@@ -211,6 +221,11 @@ class DigestStore:
                 decision.get("suggested_name"),
                 decision.get("suggested_category"),
                 json.dumps(decision.get("tags", [])),
+                decision.get("pillar"),
+                decision.get("overlap"),
+                decision.get("relevance"),
+                decision.get("usefulness"),
+                decision.get("usefulness_notes"),
                 decision.get("target_database"),
                 decision.get("dedup_status"),
                 json.dumps(decision.get("dedup_matches", [])),

@@ -256,6 +256,15 @@ def write_accepted(run_id: int) -> dict:
     if result["errors"]:
         for err in result["errors"]:
             print(f"    - {err}")
+
+    # Invalidate dedup cache so next pipeline run rebuilds with newly written items
+    if result["created"] > 0 or result["updated"] > 0:
+        from src.notion.dedup import _cache_file
+        cache = _cache_file()
+        if cache.exists():
+            cache.unlink()
+            print("  Dedup cache invalidated (will rebuild on next pipeline run)")
+
     return result
 
 
