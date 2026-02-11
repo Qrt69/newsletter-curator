@@ -24,7 +24,17 @@ _SKIP_URL_PATTERNS = re.compile(
     r"|facebook\.com/sharer|linkedin\.com/sharing"
     r"|mailto:|javascript:"
     r"|apps\.apple\.com/|play\.google\.com/store"
-    r"|medium\.com/m/|medium\.com/tag/)",
+    r"|medium\.com/m/|medium\.com/tag/"
+    # Newsletter platforms
+    r"|substack\.com/$|substack\.com/\?|beehiiv\.com"
+    r"|convertkit\.com|mailchimp\.com|campaign-archive"
+    # Sponsor/referral tracking
+    r"|sparkloop\.app|swapstack\.co|refind\.com"
+    # Community/chat invites
+    r"|discord\.gg/|discord\.com/invite/"
+    r"|t\.me/|slack\.com/|chat\.whatsapp\.com"
+    # Feeds
+    r"|/feed$|/rss$|/atom\.xml)",
     re.IGNORECASE,
 )
 
@@ -42,14 +52,29 @@ _BOILERPLATE_TEXT = re.compile(
     r"|view in browser|open in app|view online"
     r"|learn more|click here|download app|get the app"
     r"|manage preferences|update preferences"
-    r"|share|tweet|post)$",
+    r"|share|tweet|post"
+    # Navigation
+    r"|home|about|contact|archive|past issues|all posts|explore"
+    # Account/onboarding
+    r"|login|register|sign up free|start writing|get started"
+    # Sponsor/ads
+    r"|advertise|sponsor|become a sponsor|promoted"
+    # Social platform names
+    r"|twitter|linkedin|youtube|discord|github"
+    # Legal/misc
+    r"|privacy|privacy policy|terms|terms of service|rss|podcast"
+    # Newsletter actions
+    r"|unsubscribe|view online|refer a friend|share this)$",
     re.IGNORECASE,
 )
 
 
 def _is_boilerplate_text(text: str) -> bool:
-    """Return True if the link text is a known boilerplate phrase."""
-    return bool(_BOILERPLATE_TEXT.match(text.strip()))
+    """Return True if the link text is a known boilerplate phrase or too short."""
+    stripped = text.strip()
+    if len(stripped) <= 2:
+        return True
+    return bool(_BOILERPLATE_TEXT.match(stripped))
 
 
 # Patterns that indicate a site error page rather than real content
@@ -68,23 +93,37 @@ def _is_error_page(text: str) -> bool:
     return bool(_ERROR_PAGE_PATTERNS.search(text))
 
 
+# Generic non-article path suffixes (lowercase, no leading slash)
+_NON_ARTICLE_PATHS = {
+    "about", "contact", "privacy", "privacy-policy", "terms",
+    "terms-of-service", "pricing", "login", "signin", "sign-in",
+    "signup", "sign-up", "search", "archive", "archives",
+    "careers", "jobs", "settings", "account", "profile",
+    "help", "faq", "support", "docs", "documentation",
+    "sponsor", "advertise", "newsletter", "subscribe",
+}
+
+
 def _is_non_article_url(url: str) -> bool:
     """
     Return True if the URL structurally looks like a non-article page.
 
     Catches author profiles, publication homepages, tag pages,
-    social media profiles, and app store links.
+    social media profiles, app store links, domain roots,
+    and common non-article paths.
     """
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").lower()
     path = parsed.path.rstrip("/")
     segments = [s for s in path.split("/") if s]
 
+    # Domain roots — bare homepage with no meaningful path
+    if not segments:
+        return True
+
     # Medium: skip profiles (/@user), publication homepages (/pub-name),
     # tag pages (/tag/*), and internal pages (/m/*)
     if "medium.com" in hostname:
-        if not segments:
-            return True  # medium.com root
         if len(segments) == 1:
             # Single segment = profile (@user) or publication page
             return True
@@ -93,6 +132,18 @@ def _is_non_article_url(url: str) -> bool:
         if segments[0] == "m":
             return True
         return False
+
+    # Substack: only allow /p/ (actual posts)
+    if "substack.com" in hostname:
+        if segments and segments[0] == "p":
+            return False
+        return True
+
+    # Beehiiv: skip internal pages (only keep /p/ article paths)
+    if "beehiiv.com" in hostname:
+        if segments and segments[0] == "p":
+            return False
+        return True
 
     # Twitter/X: skip profile pages (no /status/ in path)
     if hostname in ("twitter.com", "www.twitter.com", "x.com", "www.x.com"):
@@ -112,8 +163,30 @@ def _is_non_article_url(url: str) -> bool:
             return True
         return False
 
+    # YouTube: skip channels/playlists, allow only /watch (videos)
+    if "youtube.com" in hostname:
+        if segments and segments[0] in ("channel", "c", "playlist", "user"):
+            return True
+        if segments and segments[0].startswith("@"):
+            return True
+        return False
+
+    # Reddit: skip bare subreddit pages, allow full post URLs
+    if "reddit.com" in hostname:
+        # /r/subreddit/comments/... is a post — allow it
+        if len(segments) >= 4 and segments[0] == "r" and segments[2] == "comments":
+            return False
+        # /r/subreddit with no post = subreddit listing — skip
+        if len(segments) <= 2 and segments[0] == "r":
+            return True
+        return False
+
     # App stores (belt-and-suspenders with _SKIP_URL_PATTERNS)
     if "apps.apple.com" in hostname or "play.google.com" in hostname:
+        return True
+
+    # Generic non-article paths (e.g. /about, /pricing, /careers)
+    if len(segments) == 1 and segments[0].lower() in _NON_ARTICLE_PATHS:
         return True
 
     return False
