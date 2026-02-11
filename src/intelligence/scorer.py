@@ -195,6 +195,8 @@ class Scorer:
             "suggested_name": data.get("suggested_name", ""),
             "suggested_category": data.get("suggested_category", ""),
             "tags": data.get("tags", []),
+            "is_listicle": bool(data.get("is_listicle", False)),
+            "listicle_item_type": data.get("listicle_item_type"),
         }
 
     @staticmethod
@@ -212,4 +214,6 @@ class Scorer:
             "tags": [],
             "url": item.get("resolved_url") or item.get("source_url") or item.get("url", ""),
             "link_text": item.get("link_text", ""),
+            "is_listicle": False,
+            "listicle_item_type": None,
         }

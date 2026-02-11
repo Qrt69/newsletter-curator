@@ -62,11 +62,25 @@ def item_row(item: dict) -> rx.Component:
     return rx.table.row(
         rx.table.cell(score_badge(item["score"])),
         rx.table.cell(
-            rx.link(
-                rx.text(item["suggested_name"], weight="medium"),
-                on_click=DigestState.open_detail(item["id"]),
-                cursor="pointer",
-                _hover={"text_decoration": "underline"},
+            rx.hstack(
+                rx.link(
+                    rx.text(item["suggested_name"], weight="medium"),
+                    on_click=DigestState.open_detail(item["id"]),
+                    cursor="pointer",
+                    _hover={"text_decoration": "underline"},
+                ),
+                rx.cond(
+                    item["source_article"],
+                    rx.badge(
+                        item["source_article"],
+                        color_scheme="gray",
+                        variant="surface",
+                        size="1",
+                    ),
+                    rx.fragment(),
+                ),
+                align="center",
+                spacing="2",
             ),
         ),
         rx.table.cell(rx.text(item["item_type"], size="2", color="gray")),
@@ -234,6 +248,17 @@ def detail_dialog() -> rx.Component:
                 item["email_subject"],
                 rx.text(
                     "From: " + item["email_subject"].to(str),
+                    size="2",
+                    color="gray",
+                    margin_bottom="12px",
+                ),
+                rx.fragment(),
+            ),
+
+            rx.cond(
+                item["source_article"],
+                rx.text(
+                    "From listicle: " + item["source_article"].to(str),
                     size="2",
                     color="gray",
                     margin_bottom="12px",

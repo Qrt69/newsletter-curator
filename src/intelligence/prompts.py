@@ -38,7 +38,8 @@ interest profile and return a structured JSON response.
 | From trusted source | +1 |
 | No artifact, just landing page | -2 |
 | Marketing heavy, substance light | -2 |
-| Listicle with no depth | -1 |
+| Shallow listicle (no depth, just a list of names) | -1 |
+| Listicle of individually notable tools/libraries (will be exploded into sub-items) | 0 |
 
 ### Verdict thresholds
 | Score | Verdict |
@@ -75,8 +76,17 @@ Return ONLY valid JSON (no markdown fences, no extra text) with these fields:
     "signals": ["<signal description with points, e.g. '+3 matches Python libraries'>"],
     "suggested_name": "<clean title for a Notion entry>",
     "suggested_category": "<e.g. 'Data Validation', 'LLM Framework', 'Vector Database'>",
-    "tags": ["<2-5 relevant tags>"]
+    "tags": ["<2-5 relevant tags>"],
+    "is_listicle": false,
+    "listicle_item_type": null
 }
+
+### Listicle detection
+Set `is_listicle: true` when the article is a list/roundup of multiple individual tools, libraries, \
+or products that could each be a separate database entry (e.g. "10 Python Libraries for Data Science", \
+"Best AI Tools for 2025"). Set `listicle_item_type` to the item_type that best describes the \
+individual sub-items (e.g. "python_library", "ai_tool"). Leave `listicle_item_type` as null if the \
+listicle contains mixed types or types that don't match tool/library categories.
 """
 
 SCORER_USER_TEMPLATE = """\

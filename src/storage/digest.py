@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS items (
     dedup_matches       TEXT,
     action              TEXT,
 
+    -- Listicle explosion
+    source_article      TEXT,
+
     -- Review state
     user_decision       TEXT,
     decided_at          TEXT,
@@ -106,6 +109,11 @@ class DigestStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        # Migrate: add source_article column if missing (for existing DBs)
+        try:
+            self._conn.execute("ALTER TABLE items ADD COLUMN source_article TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         self._conn.commit()
 
     # ── Runs ────────────────────────────────────────────────────
@@ -180,8 +188,9 @@ class DigestStore:
                 url, link_text, title, author, text,
                 score, verdict, item_type, description, reasoning, signals,
                 suggested_name, suggested_category, tags,
-                target_database, dedup_status, dedup_matches, action
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                target_database, dedup_status, dedup_matches, action,
+                source_article
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 _now(),
@@ -206,6 +215,7 @@ class DigestStore:
                 decision.get("dedup_status"),
                 json.dumps(decision.get("dedup_matches", [])),
                 decision.get("action"),
+                decision.get("source_article"),
             ),
         )
         self._conn.commit()

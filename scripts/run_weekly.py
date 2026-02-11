@@ -174,6 +174,17 @@ async def _run_pipeline_inner():
             if field not in result and original.get(field):
                 result[field] = original[field]
 
+    # 3b. Explode listicles
+    from src.intelligence.exploder import ListicleExploder
+    exploder = ListicleExploder()
+    pre_count = len(scored)
+    scored = exploder.process_batch(scored)
+    if len(scored) != pre_count:
+        print(f"  Exploded listicles: {pre_count} -> {len(scored)} items")
+    exploder_stats = exploder.stats()
+    if exploder_stats["items_exploded"] > 0:
+        print(f"  Exploder stats: {exploder_stats}")
+
     # 4. Route items
     print("\n[4/5] Routing items...")
     nc = NotionClient()
@@ -188,7 +199,7 @@ async def _run_pipeline_inner():
     # (Router doesn't pass through title/author/text either)
     for original, decision in zip(scored, decisions):
         decision["_email_meta"] = original.get("_email_meta", {})
-        for field in ("title", "author", "text"):
+        for field in ("title", "author", "text", "source_article"):
             if field not in decision and original.get(field):
                 decision[field] = original[field]
 

@@ -66,6 +66,7 @@ class Router:
             "tags": scored_item.get("tags", []),
             "url": scored_item.get("url", ""),
             "link_text": scored_item.get("link_text", ""),
+            "source_article": scored_item.get("source_article"),
             "target_database": target_db,
             "dedup_status": "new",
             "dedup_matches": [],
@@ -119,7 +120,7 @@ class Router:
 
             # Within-batch URL dedup
             url = decision["url"]
-            if url and url in seen_urls and decision["action"] == "propose":
+            if url and url in seen_urls and decision["action"] == "propose" and not decision.get("source_article"):
                 decision["dedup_status"] = "duplicate"
                 decision["action"] = "skip"
             elif url:
