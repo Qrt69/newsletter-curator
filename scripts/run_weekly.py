@@ -248,7 +248,9 @@ def write_accepted(run_id: int) -> dict:
     print(f"Writing accepted items for run {run_id}...")
     nc = NotionClient()
     store = DigestStore(DB_PATH)
-    writer = NotionWriter(nc, store)
+    dedup = DedupIndex(nc)
+    dedup.load()  # Cache is fine here — relations are non-destructive
+    writer = NotionWriter(nc, store, dedup_index=dedup)
     result = writer.write_batch(run_id)
     print(f"  Created: {result['created']}")
     print(f"  Updated: {result['updated']}")

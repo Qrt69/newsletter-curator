@@ -174,6 +174,14 @@ PROPERTY_MAP = {
 }
 
 
+# Relation config: database -> list of (relation_property, target_database)
+RELATION_MAP = {
+    "Articles & Reads": [("Related Concepts", "Topics & Concepts")],
+    "Books & Papers": [("Related Topics", "Topics & Concepts")],
+    "Topics & Concepts": [("Related Books & Papers", "Books & Papers")],
+}
+
+
 class NotionWriter:
     """
     Writes accepted digest items to Notion as pages.
@@ -184,9 +192,10 @@ class NotionWriter:
         print(summary)  # {created: N, updated: N, failed: N, errors: [...]}
     """
 
-    def __init__(self, notion_client: NotionClient, digest_store):
+    def __init__(self, notion_client: NotionClient, digest_store, dedup_index=None):
         self._notion = notion_client
         self._store = digest_store
+        self._dedup = dedup_index
 
     def write_item(self, item: dict) -> str:
         """
@@ -228,7 +237,53 @@ class NotionWriter:
         # Record page ID in digest DB
         self._store.set_notion_page_id(item["id"], page_id)
 
+        # Link relations to entries in related databases
+        self._link_relations(page_id, item, target_db)
+
         return page_id
+
+    def _link_relations(self, page_id: str, item: dict, target_db: str) -> None:
+        """
+        Search the dedup index for related entries and link them via
+        Notion relation properties.
+
+        No-op if dedup_index was not provided or target_db has no relations.
+        """
+        if not self._dedup:
+            return
+
+        relations = RELATION_MAP.get(target_db)
+        if not relations:
+            return
+
+        # Collect search terms from tags + suggested_category
+        terms: list[str] = []
+        if item.get("tags"):
+            terms.extend(item["tags"])
+        if item.get("suggested_category"):
+            terms.append(item["suggested_category"])
+
+        if not terms:
+            return
+
+        for relation_property, relation_target_db in relations:
+            related_page_ids: list[str] = []
+            seen: set[str] = set()
+
+            for term in terms:
+                matches = self._dedup.search_by_name(term, threshold=85)
+                for match in matches:
+                    if match["database"] == relation_target_db and match["id"] not in seen:
+                        seen.add(match["id"])
+                        related_page_ids.append(match["id"])
+
+            if related_page_ids:
+                try:
+                    self._notion.add_relation(page_id, relation_property, related_page_ids)
+                    print(f"           -> linked {len(related_page_ids)} {relation_target_db} "
+                          f"entries via '{relation_property}'")
+                except Exception as exc:
+                    print(f"           -> relation link failed ({relation_property}): {exc}")
 
     def write_batch(self, run_id: int) -> dict:
         """
