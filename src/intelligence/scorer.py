@@ -9,6 +9,7 @@ import json
 import os
 import re
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
@@ -116,13 +117,19 @@ class Scorer:
             self._errors += 1
         return self._error_result(item, f"scoring failed after retries: {last_error}")
 
-    def score_batch(self, items: list[dict], max_workers: int = 4) -> list[dict]:
+    def score_batch(
+        self,
+        items: list[dict],
+        max_workers: int = 4,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[dict]:
         """
         Score a list of items in parallel with progress output.
 
         Args:
             items: List of dicts from ContentExtractor.
             max_workers: Number of concurrent scoring threads (default 4).
+            on_progress: Optional callback(current, total) called after each item is scored.
 
         Returns:
             List of scored dicts (same order as input).
@@ -139,6 +146,8 @@ class Scorer:
             verdict = result.get("verdict", "?")
             score = result.get("score", "?")
             print(f"  [{i}/{total}] -> {verdict} (score: {score})")
+            if on_progress is not None:
+                on_progress(i, total)
             return result
 
         with ThreadPoolExecutor(max_workers=max_workers) as pool:

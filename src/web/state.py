@@ -69,6 +69,17 @@ class DigestState(rx.State):
         lock_path = os.path.join(data_dir, ".pipeline_running")
         return os.path.exists(lock_path)
 
+    @staticmethod
+    def _read_progress_file() -> str:
+        """Read the pipeline progress file, returning its content or empty string."""
+        data_dir = os.environ.get("DATA_DIR", ".")
+        progress_path = os.path.join(data_dir, ".pipeline_progress")
+        try:
+            with open(progress_path, "r") as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
     def check_pipeline_status(self) -> None:
         """Check if pipeline is still running (via lock file)."""
         was_running = self.pipeline_running
@@ -122,10 +133,13 @@ class DigestState(rx.State):
 
         # Poll every 3 seconds until pipeline finishes or force-stopped
         while t.is_alive():
-            await asyncio.sleep(3)
             async with self:
                 if self._force_stopped:
                     break
+                progress = self._read_progress_file()
+                if progress:
+                    self.pipeline_status = progress
+            await asyncio.sleep(3)
 
         async with self:
             if self._force_stopped:

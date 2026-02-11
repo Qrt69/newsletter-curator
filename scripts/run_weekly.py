@@ -47,7 +47,25 @@ import time
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 DB_PATH = os.path.join(DATA_DIR, "digest.db")
 LOCK_FILE = os.path.join(DATA_DIR, ".pipeline_running")
+PROGRESS_FILE = os.path.join(DATA_DIR, ".pipeline_progress")
 LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
+
+
+def _write_progress(msg: str):
+    """Write current pipeline progress to a file for the web UI to read."""
+    try:
+        with open(PROGRESS_FILE, "w") as f:
+            f.write(msg)
+    except OSError:
+        pass
+
+
+def _clear_progress():
+    """Remove the progress file."""
+    try:
+        os.remove(PROGRESS_FILE)
+    except OSError:
+        pass
 
 
 def is_pipeline_locked() -> bool:
@@ -101,6 +119,7 @@ async def run_pipeline():
     try:
         await _run_pipeline_inner()
     finally:
+        _clear_progress()
         _release_lock(token)
 
 
@@ -113,6 +132,7 @@ async def _run_pipeline_inner():
     store = DigestStore(DB_PATH)
 
     # 1. Fetch emails
+    _write_progress("Fetching emails...")
     print("\n[1/5] Fetching emails...")
     fetcher = EmailFetcher()
     emails = await fetcher.fetch_emails()
@@ -133,11 +153,13 @@ async def _run_pipeline_inner():
     print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
 
     # 2. Extract content
+    _write_progress("Extracting content...")
     print("\n[2/5] Extracting content...")
     extractor = ContentExtractor(browser_fetcher=browser_fetcher)
     all_items = []
     for i, email in enumerate(emails, 1):
         subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
+        _write_progress(f"Extracting content ({i}/{len(emails)} emails)")
         print(f"  [{i}/{len(emails)}] {subject}")
         items = extractor.extract_from_email(email["body_html"])
         # Tag items with email metadata
@@ -160,6 +182,7 @@ async def _run_pipeline_inner():
         return
 
     # 3. Score items (with feedback learning)
+    _write_progress("Scoring items...")
     print("\n[3/5] Scoring items...")
     feedback_proc = FeedbackProcessor(store)
     feedback_examples = feedback_proc.format_examples()
@@ -170,7 +193,11 @@ async def _run_pipeline_inner():
         print("  No feedback overrides to inject")
 
     scorer = Scorer(feedback_examples=feedback_examples)
-    scored = scorer.score_batch(all_items)
+
+    def _scoring_progress(i: int, total: int):
+        _write_progress(f"Scoring ({i}/{total} items)")
+
+    scored = scorer.score_batch(all_items, on_progress=_scoring_progress)
     print(f"  Scored {len(scored)} items")
     print(f"  Token usage: {scorer.stats()}")
 
@@ -194,6 +221,7 @@ async def _run_pipeline_inner():
         print(f"  Exploder stats: {exploder_stats}")
 
     # 4. Route items
+    _write_progress("Routing items...")
     print("\n[4/5] Routing items...")
     nc = NotionClient()
     dedup = DedupIndex(nc)
@@ -212,6 +240,7 @@ async def _run_pipeline_inner():
                 decision[field] = original[field]
 
     # 5. Store in digest DB
+    _write_progress("Storing results...")
     print("\n[5/5] Storing in digest DB...")
     for decision in decisions:
         email_meta = decision.pop("_email_meta", None)
@@ -240,12 +269,14 @@ async def _run_pipeline_inner():
     print("  -> Open the web app to review proposed items.")
 
     # 6. Move processed emails
+    _write_progress("Moving emails...")
     print("\n[+] Moving emails to 'Processed'...")
     moved = 0
     for email in emails:
         try:
             await fetcher.move_to_processed(email["id"])
             moved += 1
+            _write_progress(f"Moving emails ({moved}/{len(emails)})")
         except Exception as exc:
             print(f"  Failed to move {email['id']}: {exc}")
     print(f"  Moved {moved}/{len(emails)} emails")
