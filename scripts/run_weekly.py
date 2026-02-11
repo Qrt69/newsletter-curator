@@ -192,7 +192,7 @@ async def _run_pipeline_inner():
     else:
         print("  No feedback overrides to inject")
 
-    scorer = Scorer(feedback_examples=feedback_examples)
+    scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=0)
 
     def _scoring_progress(i: int, total: int):
         _write_progress(f"Scoring ({i}/{total} items)")
