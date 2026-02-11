@@ -52,6 +52,22 @@ def _is_boilerplate_text(text: str) -> bool:
     return bool(_BOILERPLATE_TEXT.match(text.strip()))
 
 
+# Patterns that indicate a site error page rather than real content
+_ERROR_PAGE_PATTERNS = re.compile(
+    r"(500 Apolog|something went wrong on our end"
+    r"|page is unavailable|502 Bad Gateway"
+    r"|503 Service Unavailable|504 Gateway)",
+    re.IGNORECASE,
+)
+
+
+def _is_error_page(text: str) -> bool:
+    """Return True if extracted text looks like a site error page, not a real article."""
+    if not text or len(text) > 500:
+        return False  # Real articles are longer than 500 chars
+    return bool(_ERROR_PAGE_PATTERNS.search(text))
+
+
 def _is_non_article_url(url: str) -> bool:
     """
     Return True if the URL structurally looks like a non-article page.
@@ -304,6 +320,16 @@ class ContentExtractor:
             }
 
         text = doc.text or ""
+
+        # Detect error pages masquerading as content (e.g. Medium soft-500)
+        if _is_error_page(text):
+            return {
+                **base,
+                "extraction_status": "error_page",
+                "error": "site returned an error page instead of article content",
+                "text_length": 0,
+            }
+
         return {
             "title": doc.title,
             "author": doc.author,

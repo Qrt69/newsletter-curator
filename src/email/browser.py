@@ -107,9 +107,13 @@ class BrowserFetcher:
             opts["storage_state"] = self._state_path
         return self._browser.new_context(**opts)
 
-    def fetch_page(self, url: str) -> tuple[str, str | None]:
+    def fetch_page(
+        self, url: str, retries: int = 2, retry_delay: float = 5.0,
+    ) -> tuple[str, str | None]:
         """
         Fetch a page using Playwright and return rendered HTML.
+
+        Retries on 5xx server errors (common with Medium transient failures).
 
         Returns:
             Tuple of (html_content, error_or_none)
@@ -119,20 +123,38 @@ class BrowserFetcher:
         except Exception as exc:
             return "", f"browser_launch_failed: {exc}"
 
-        context = None
-        try:
-            context = self._new_context()
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            # Wait a bit for JS-rendered content
-            page.wait_for_timeout(2000)
-            html = page.content()
-            return html, None
-        except Exception as exc:
-            return "", f"browser_fetch_failed: {exc}"
-        finally:
-            if context:
-                context.close()
+        last_error = None
+        for attempt in range(retries + 1):
+            context = None
+            try:
+                context = self._new_context()
+                page = context.new_page()
+                response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+                # Retry on server errors (5xx)
+                if response and response.status >= 500:
+                    last_error = f"HTTP {response.status}"
+                    if attempt < retries:
+                        print(f"  [browser] {last_error}, retrying ({attempt + 1}/{retries})...")
+                        time.sleep(retry_delay)
+                        continue
+                    return "", f"browser_fetch_failed: {last_error} after {retries + 1} attempts"
+
+                # Wait a bit for JS-rendered content
+                page.wait_for_timeout(2000)
+                html = page.content()
+                return html, None
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < retries:
+                    time.sleep(retry_delay)
+                    continue
+                return "", f"browser_fetch_failed: {exc}"
+            finally:
+                if context:
+                    context.close()
+
+        return "", f"browser_fetch_failed: {last_error}"
 
     def resolve_url(self, url: str) -> tuple[str, str | None]:
         """
