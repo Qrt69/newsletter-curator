@@ -39,6 +39,28 @@ def test_needs_browser():
     print("  [PASS] test_needs_browser")
 
 
+def test_extract_otp_code():
+    """Test OTP code extraction from Medium email HTML."""
+    from src.email.browser import BrowserSession
+
+    extract = BrowserSession._extract_otp_code
+
+    # Typical Medium OTP email
+    assert extract("<p>Your code is <b>482917</b></p>") == "482917"
+    # Code in plain text
+    assert extract("<p>Use this one-time code to sign in: 123456</p>") == "123456"
+    # No code present
+    assert extract("<p>Welcome to Medium</p>") is None
+    # Empty / None
+    assert extract("") is None
+    assert extract(None) is None
+    # Should NOT match 5-digit or 7-digit numbers
+    assert extract("<p>Code: 12345</p>") is None
+    assert extract("<p>Code: 1234567</p>") is None
+
+    print("  [PASS] test_extract_otp_code")
+
+
 def test_browser_fetcher_public():
     """Test BrowserFetcher with a simple public page."""
     from src.email.browser import BrowserFetcher
@@ -118,7 +140,7 @@ def test_browser_fetcher_medium():
 
 
 def test_medium_login():
-    """Test full Medium magic-link login — needs MS Graph + Medium account."""
+    """Test full Medium OTP login — needs MS Graph + Medium account."""
     import asyncio
     from dotenv import load_dotenv
 
@@ -170,6 +192,7 @@ if __name__ == "__main__":
 
     print("Unit tests:")
     test_needs_browser()
+    test_extract_otp_code()
     test_browser_fetcher_public()
 
     print("\nIntegration tests:")

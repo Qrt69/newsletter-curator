@@ -2,17 +2,18 @@
 Browser-based fetching for Newsletter Curator.
 
 Provides Playwright-based fallback for domains that block non-browser
-requests (Medium, Beehiiv). Includes Medium magic-link login flow.
+requests (Medium, Beehiiv). Includes Medium OTP code login flow.
 
 Two classes:
   - BrowserFetcher (sync) — used by ContentExtractor for page fetching
-  - BrowserSession (async) — handles Medium login via magic-link email
+  - BrowserSession (async) — handles Medium login via emailed OTP code
 
 Storage state file (.browser_state.json) bridges async login and sync fetching.
 """
 
 import asyncio
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -28,8 +29,8 @@ def _default_state_path() -> str:
     return str(Path(data_dir) / ".browser_state.json")
 
 _SESSION_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
-_MAGIC_LINK_TIMEOUT = 120  # seconds to wait for magic link email
-_MAGIC_LINK_POLL_INTERVAL = 5  # seconds between inbox polls
+_OTP_TIMEOUT = 120  # seconds to wait for OTP code email
+_OTP_POLL_INTERVAL = 5  # seconds between inbox polls
 
 
 def needs_browser(url: str) -> bool:
@@ -147,13 +148,13 @@ class BrowserFetcher:
 
 class BrowserSession:
     """
-    Async session manager for Medium magic-link login.
+    Async session manager for Medium OTP login.
 
     Uses async_playwright + EmailFetcher to:
     1. Navigate to Medium sign-in page
     2. Enter email and submit
-    3. Poll inbox for magic link email
-    4. Navigate to magic link to complete auth
+    3. Poll inbox for OTP code email
+    4. Type OTP code into the browser to complete auth
     5. Save storage state for BrowserFetcher to use
 
     Usage:
@@ -205,12 +206,12 @@ class BrowserSession:
 
     async def login_medium(self) -> bool:
         """
-        Full Medium magic-link login flow.
+        Full Medium OTP code login flow.
 
         1. Open Medium sign-in page
         2. Enter email, submit
-        3. Poll inbox for magic link
-        4. Navigate to magic link
+        3. Poll inbox for 6-digit OTP code
+        4. Type code into the browser
         5. Save storage state
         """
         from playwright.async_api import async_playwright
@@ -270,20 +271,47 @@ class BrowserSession:
                     await email_input.press("Enter")
 
                 await page.wait_for_timeout(2000)
-                print("  [browser] Email submitted, waiting for magic link...")
+                print("  [browser] Email submitted, waiting for OTP code...")
 
-                # Poll for magic link email
-                magic_link = await self._poll_for_magic_link(sent_after)
-                if not magic_link:
-                    print("  [browser] Timed out waiting for magic link email")
+                # Poll for OTP code email
+                otp_code = await self._poll_for_otp_code(sent_after)
+                if not otp_code:
+                    print("  [browser] Timed out waiting for OTP code email")
                     return False
 
-                # Navigate to magic link
-                print("  [browser] Opening magic link...")
-                await page.goto(
-                    magic_link, wait_until="domcontentloaded", timeout=30000
-                )
-                await page.wait_for_timeout(3000)
+                # Find the OTP input field and enter the code
+                print(f"  [browser] Entering OTP code: {otp_code}")
+                otp_input = page.locator(
+                    'input[type="text"], input[type="number"], input[type="tel"]'
+                ).first
+                try:
+                    await otp_input.wait_for(state="visible", timeout=10000)
+                except Exception:
+                    # Fallback: try any visible textbox
+                    otp_input = page.get_by_role("textbox").first
+                    try:
+                        await otp_input.wait_for(state="visible", timeout=5000)
+                    except Exception:
+                        print("  [browser] Could not find OTP input field")
+                        print("  [browser] Use --browser-login for manual login")
+                        return False
+
+                await otp_input.fill(otp_code)
+                await page.wait_for_timeout(1000)
+
+                # Submit the code — try button first, then Enter
+                verify_btn = page.get_by_role("button", name="Complete sign in")
+                try:
+                    await verify_btn.click(timeout=3000)
+                except Exception:
+                    try:
+                        verify_btn = page.get_by_role("button", name="Verify")
+                        await verify_btn.click(timeout=3000)
+                    except Exception:
+                        await otp_input.press("Enter")
+
+                # Wait for login to complete (page navigation)
+                await page.wait_for_timeout(5000)
 
                 # Save storage state
                 await context.storage_state(path=self.state_path)
@@ -293,12 +321,13 @@ class BrowserSession:
             finally:
                 await browser.close()
 
-    async def _poll_for_magic_link(self, sent_after: str) -> str | None:
-        """Poll inbox for Medium magic link email."""
+    async def _poll_for_otp_code(self, sent_after: str) -> str | None:
+        """Poll inbox for Medium OTP code email."""
         elapsed = 0
-        while elapsed < _MAGIC_LINK_TIMEOUT:
-            await asyncio.sleep(_MAGIC_LINK_POLL_INTERVAL)
-            elapsed += _MAGIC_LINK_POLL_INTERVAL
+        while elapsed < _OTP_TIMEOUT:
+            await asyncio.sleep(_OTP_POLL_INTERVAL)
+            elapsed += _OTP_POLL_INTERVAL
+            print(f"  [browser] Polling inbox ({elapsed}s / {_OTP_TIMEOUT}s)...")
 
             try:
                 messages = await self._fetcher.search_inbox(
@@ -311,26 +340,23 @@ class BrowserSession:
                 continue
 
             for msg in messages:
-                link = self._extract_magic_link(msg.get("body_html", ""))
-                if link:
-                    return link
+                code = self._extract_otp_code(msg.get("body_html", ""))
+                if code:
+                    return code
 
         return None
 
     @staticmethod
-    def _extract_magic_link(body_html: str) -> str | None:
-        """Extract Medium sign-in link from email HTML."""
+    def _extract_otp_code(body_html: str) -> str | None:
+        """Extract 6-digit OTP code from Medium sign-in email HTML."""
         if not body_html:
             return None
+        # Strip HTML tags and look for a standalone 6-digit number
         soup = BeautifulSoup(body_html, "html.parser")
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag["href"]
-            if "medium.com" in href and (
-                "/callback/" in href
-                or "/signin/" in href
-                or "token=" in href
-            ):
-                return href
+        text = soup.get_text(" ", strip=True)
+        match = re.search(r"\b(\d{6})\b", text)
+        if match:
+            return match.group(1)
         return None
 
 
