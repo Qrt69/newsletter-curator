@@ -156,14 +156,27 @@ class FeedbackProcessor:
         """
         Convert detected patterns into human-readable rule proposals.
 
+        Contradictory patterns (same item_type promoted AND demoted) are
+        suppressed — they indicate the type is too broad, not that a rule
+        should be added.
+
         Returns:
             List of proposal dicts with proposal, type, detail,
             evidence_count, examples.
         """
         patterns = self.detect_patterns()
+
+        # Find item_types with patterns in both directions — these cancel out
+        types_by_direction = defaultdict(set)
+        for pattern in patterns:
+            types_by_direction[pattern["override_type"]].add(pattern["item_type"])
+        contradictory = types_by_direction.get("promoted", set()) & types_by_direction.get("demoted", set())
+
         proposals = []
 
         for pattern in patterns:
+            if pattern["item_type"] in contradictory:
+                continue
             item_type = pattern["item_type"]
             override_type = pattern["override_type"]
             count = pattern["count"]
