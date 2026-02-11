@@ -149,13 +149,9 @@ class DedupIndex:
         results = []
         name_lower = name.lower()
         for entry in self._entries:
-            # Use the higher of token_sort_ratio (reordered strings) and
-            # token_set_ratio (subset matching — catches "HTTPX" inside
-            # "HTTPX - Python HTTP Client" and vice versa)
-            score = max(
-                fuzz.token_sort_ratio(name_lower, entry["name_lower"]),
-                fuzz.token_set_ratio(name_lower, entry["name_lower"]),
-            )
+            # Use token_sort_ratio which handles reordered words but requires
+            # the full names to be similar (not just substring matches)
+            score = fuzz.token_sort_ratio(name_lower, entry["name_lower"])
             if score >= threshold:
                 results.append({
                     "name": entry["name"],
