@@ -139,13 +139,16 @@ async def _run_pipeline_inner():
     print(f"  Fetched {len(emails)} emails from 'To qualify'")
 
     if not emails:
+        _write_progress("No emails to process")
         print("  No emails to process. Done.")
         return
 
+    _write_progress(f"Fetched {len(emails)} emails, preparing...")
     run_id = store.create_run(emails_fetched=len(emails))
     print(f"  Run ID: {run_id}")
 
     # 1b. Ensure browser session for Medium/Beehiiv
+    _write_progress("Checking browser session...")
     print("\n[1b] Checking browser session for Medium/Beehiiv...")
     session = BrowserSession(fetcher)
     logged_in = await session.ensure_logged_in()
@@ -221,11 +224,12 @@ async def _run_pipeline_inner():
         print(f"  Exploder stats: {exploder_stats}")
 
     # 4. Route items
-    _write_progress("Routing items...")
+    _write_progress("Building dedup index from Notion...")
     print("\n[4/5] Routing items...")
     nc = NotionClient()
     dedup = DedupIndex(nc)
     dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
+    _write_progress("Routing items...")
     router = Router(dedup)
     decisions = router.route_batch(scored)
     summary = Router.summary(decisions)
