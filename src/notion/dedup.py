@@ -142,8 +142,15 @@ class DedupIndex:
             List of matching entries with a "score" field, sorted best-first.
         """
         results = []
+        name_lower = name.lower()
         for entry in self._entries:
-            score = fuzz.token_sort_ratio(name.lower(), entry["name_lower"])
+            # Use the higher of token_sort_ratio (reordered strings) and
+            # token_set_ratio (subset matching — catches "HTTPX" inside
+            # "HTTPX - Python HTTP Client" and vice versa)
+            score = max(
+                fuzz.token_sort_ratio(name_lower, entry["name_lower"]),
+                fuzz.token_set_ratio(name_lower, entry["name_lower"]),
+            )
             if score >= threshold:
                 results.append({
                     "name": entry["name"],

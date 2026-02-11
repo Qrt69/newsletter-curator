@@ -189,7 +189,7 @@ async def _run_pipeline_inner():
     print("\n[4/5] Routing items...")
     nc = NotionClient()
     dedup = DedupIndex(nc)
-    dedup.load()
+    dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
     router = Router(dedup)
     decisions = router.route_batch(scored)
     summary = Router.summary(decisions)
