@@ -32,6 +32,25 @@ _SESSION_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 _OTP_TIMEOUT = 120  # seconds to wait for OTP code email
 _OTP_POLL_INTERVAL = 5  # seconds between inbox polls
 
+# Stealth: Chromium launch args to avoid bot detection (Cloudflare, etc.)
+_BROWSER_ARGS = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=AutomationControlled",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-popup-blocking",
+]
+
+# Stealth: realistic browser context settings
+_CONTEXT_OPTIONS = {
+    "user_agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "viewport": {"width": 1920, "height": 1080},
+    "locale": "en-US",
+}
+
 
 def needs_browser(url: str) -> bool:
     """Check if a URL belongs to a domain that needs browser-based fetching."""
@@ -65,13 +84,15 @@ class BrowserFetcher:
         self._browser = None
 
     def _ensure_browser(self):
-        """Launch Playwright + Chromium on first use."""
+        """Launch Playwright + Chromium on first use with stealth args."""
         if self._browser:
             return
         try:
             from playwright.sync_api import sync_playwright
             self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(headless=True)
+            self._browser = self._playwright.chromium.launch(
+                headless=True, args=_BROWSER_ARGS,
+            )
         except Exception as exc:
             print(f"  [browser] Failed to launch Playwright: {exc}")
             self._playwright = None
@@ -79,11 +100,12 @@ class BrowserFetcher:
             raise
 
     def _new_context(self):
-        """Create a new browser context, loading storage state if available."""
+        """Create a new browser context with stealth settings and stored session."""
+        opts = dict(_CONTEXT_OPTIONS)
         state_file = Path(self._state_path)
         if state_file.exists():
-            return self._browser.new_context(storage_state=self._state_path)
-        return self._browser.new_context()
+            opts["storage_state"] = self._state_path
+        return self._browser.new_context(**opts)
 
     def fetch_page(self, url: str) -> tuple[str, str | None]:
         """
@@ -219,8 +241,10 @@ class BrowserSession:
         sent_after = _iso_now()
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
+            browser = await p.chromium.launch(
+                headless=True, args=_BROWSER_ARGS,
+            )
+            context = await browser.new_context(**_CONTEXT_OPTIONS)
             page = await context.new_page()
 
             try:
@@ -375,8 +399,8 @@ async def manual_login(state_path: str | None = None):
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
+        browser = await p.chromium.launch(headless=False, args=_BROWSER_ARGS)
+        context = await browser.new_context(**_CONTEXT_OPTIONS)
         page = await context.new_page()
 
         await page.goto("https://medium.com/m/signin", timeout=30000)
