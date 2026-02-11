@@ -255,10 +255,10 @@ class DigestState(rx.State):
                 if i.get("user_decision") is None
             ]
         else:
-            # Show only propose + review items that haven't been decided yet
+            # Show only proposed items that haven't been decided yet
             self.items = [
                 i for i in all_items
-                if i.get("action") in ("propose", "review")
+                if i.get("action") == "propose"
                 and i.get("user_decision") is None
             ]
         self.pending_count = len(self.items)

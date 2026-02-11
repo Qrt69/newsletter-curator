@@ -98,6 +98,14 @@ class Scorer:
                 result["url"] = url
                 result["link_text"] = link_text
 
+                # Fallback: ensure suggested_name is never blank
+                if not result.get("suggested_name"):
+                    result["suggested_name"] = (
+                        item.get("title")
+                        or link_text
+                        or url
+                    )
+
                 # Track token usage (thread-safe)
                 with self._lock:
                     self._total_input_tokens += response.usage.input_tokens
@@ -185,17 +193,15 @@ class Scorer:
         # Ensure score is int
         score = int(data.get("score", 0))
 
-        # Validate/correct verdict based on score
-        verdict = data.get("verdict", "")
-        if verdict not in _VALID_VERDICTS:
-            if score >= 5:
-                verdict = "strong_fit"
-            elif score >= 3:
-                verdict = "likely_fit"
-            elif score >= 1:
-                verdict = "maybe"
-            else:
-                verdict = "reject"
+        # Always derive verdict from score to prevent contradictions
+        if score >= 5:
+            verdict = "strong_fit"
+        elif score >= 3:
+            verdict = "likely_fit"
+        elif score >= 1:
+            verdict = "maybe"
+        else:
+            verdict = "reject"
 
         # Validate item_type
         item_type = data.get("item_type", "article")
@@ -224,6 +230,7 @@ class Scorer:
     @staticmethod
     def _error_result(item: dict, error_msg: str) -> dict:
         """Build a fallback result dict when scoring fails."""
+        url = item.get("resolved_url") or item.get("source_url") or item.get("url", "")
         return {
             "score": 0,
             "verdict": "error",
@@ -231,7 +238,7 @@ class Scorer:
             "description": "",
             "reasoning": error_msg,
             "signals": [],
-            "suggested_name": "",
+            "suggested_name": item.get("title") or item.get("link_text", "") or url,
             "suggested_category": "",
             "tags": [],
             "url": item.get("resolved_url") or item.get("source_url") or item.get("url", ""),

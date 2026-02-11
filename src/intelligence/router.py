@@ -91,14 +91,8 @@ class Router:
         decision["dedup_matches"] = matches
 
         if matches:
-            # Check if any match is in the same target database
-            same_db = any(m["database"] == target_db for m in matches)
-            if same_db:
-                decision["dedup_status"] = "duplicate"
-                decision["action"] = "skip"
-            else:
-                decision["dedup_status"] = "update_candidate"
-                decision["action"] = "review"
+            decision["dedup_status"] = "duplicate"
+            decision["action"] = "skip"
 
         return decision
 
