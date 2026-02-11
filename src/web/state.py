@@ -195,7 +195,9 @@ class DigestState(rx.State):
             created = result.get("created", 0) if isinstance(result, dict) else 0
             failed = result.get("failed", 0) if isinstance(result, dict) else 0
             if failed:
-                self.write_status = f"Done: {created} created, {failed} failed"
+                errors = result.get("errors", []) if isinstance(result, dict) else []
+                error_detail = "; ".join(errors) if errors else "unknown error"
+                self.write_status = f"Done: {created} created, {failed} failed — {error_detail}"
             else:
                 self.write_status = f"Written to Notion! ({created} items)"
         except Exception as exc:
