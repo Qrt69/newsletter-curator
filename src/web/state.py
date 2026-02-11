@@ -56,6 +56,7 @@ class DigestState(rx.State):
     # Pipeline trigger
     pipeline_running: bool = False
     pipeline_status: str = ""
+    _force_stopped: bool = False
 
     # Notion write
     writing_to_notion: bool = False
@@ -84,6 +85,18 @@ class DigestState(rx.State):
         if self.selected_run_id:
             self._load_items()
 
+    def force_stop_pipeline(self) -> None:
+        """Force-stop the pipeline by removing the lock file."""
+        data_dir = os.environ.get("DATA_DIR", ".")
+        lock_path = os.path.join(data_dir, ".pipeline_running")
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+        self.pipeline_running = False
+        self.pipeline_status = "Force stopped"
+        self._force_stopped = True
+
     @rx.event(background=True)
     async def trigger_pipeline(self):
         """Start the pipeline in a background thread and poll until done."""
@@ -95,6 +108,7 @@ class DigestState(rx.State):
 
             self.pipeline_running = True
             self.pipeline_status = "Running..."
+            self._force_stopped = False
 
         def _run_in_thread():
             import sys
@@ -106,18 +120,26 @@ class DigestState(rx.State):
         t = threading.Thread(target=_run_in_thread, daemon=True)
         t.start()
 
-        # Poll lock file every 3 seconds until pipeline finishes
+        # Poll every 3 seconds until pipeline finishes or force-stopped
         while t.is_alive():
             await asyncio.sleep(3)
+            async with self:
+                if self._force_stopped:
+                    break
 
         async with self:
-            self.pipeline_running = False
-            self.pipeline_status = "Complete!"
-            self._reload_runs()
-            # Auto-select the newest run
-            if self.runs:
-                self.selected_run_id = self.runs[0]["id"]
-                self._load_items()
+            if self._force_stopped:
+                # Force stop already set status; just reload runs
+                self._force_stopped = False
+                self._reload_runs()
+            else:
+                self.pipeline_running = False
+                self.pipeline_status = "Complete!"
+                self._reload_runs()
+                # Auto-select the newest run
+                if self.runs:
+                    self.selected_run_id = self.runs[0]["id"]
+                    self._load_items()
 
     def load_runs(self) -> None:
         """Load all runs from the database."""

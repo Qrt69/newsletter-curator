@@ -20,6 +20,7 @@ Usage:
 import argparse
 import asyncio
 import sys
+import uuid
 from pathlib import Path
 
 # Ensure project root is on sys.path for imports
@@ -64,21 +65,27 @@ def is_pipeline_locked() -> bool:
     return True
 
 
-def _acquire_lock() -> bool:
-    """Create the lock file. Returns False if already locked."""
+def _acquire_lock() -> str | None:
+    """Create the lock file with a unique token. Returns the token, or None if already locked."""
     if is_pipeline_locked():
-        return False
+        return None
+    token = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
     try:
         with open(LOCK_FILE, "w") as f:
-            f.write(str(os.getpid()))
-        return True
+            f.write(token)
+        return token
     except OSError:
-        return False
+        return None
 
 
-def _release_lock():
-    """Remove the lock file."""
+def _release_lock(token: str | None = None):
+    """Remove the lock file. If token is given, only remove if it matches (prevents race condition)."""
     try:
+        if token is not None:
+            with open(LOCK_FILE, "r") as f:
+                current = f.read().strip()
+            if current != token:
+                return  # Lock belongs to a different run; don't remove
         os.remove(LOCK_FILE)
     except OSError:
         pass
@@ -86,14 +93,15 @@ def _release_lock():
 
 async def run_pipeline():
     """Run the full ingest pipeline once."""
-    if not _acquire_lock():
+    token = _acquire_lock()
+    if token is None:
         print("Pipeline is already running. Skipping.")
         return
 
     try:
         await _run_pipeline_inner()
     finally:
-        _release_lock()
+        _release_lock(token)
 
 
 async def _run_pipeline_inner():

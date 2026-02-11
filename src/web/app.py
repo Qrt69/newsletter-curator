@@ -393,12 +393,22 @@ def index() -> rx.Component:
                     ),
                     rx.cond(
                         DigestState.pipeline_running,
-                        rx.button(
-                            rx.spinner(size="1"),
-                            "Running...",
-                            size="2",
-                            variant="soft",
-                            disabled=True,
+                        rx.hstack(
+                            rx.button(
+                                rx.spinner(size="1"),
+                                "Running...",
+                                size="2",
+                                variant="soft",
+                                disabled=True,
+                            ),
+                            rx.button(
+                                "Force Stop",
+                                size="2",
+                                variant="solid",
+                                color_scheme="red",
+                                on_click=DigestState.force_stop_pipeline,
+                            ),
+                            spacing="2",
                         ),
                         rx.button(
                             "Run Pipeline",
@@ -602,6 +612,15 @@ async def _api_write_notion(request):
     return JSONResponse({"status": "started", "count": len(accepted)})
 
 
+async def _api_pipeline_force_stop(request):
+    """Force-stop the pipeline by removing the lock file."""
+    try:
+        os.remove(_LOCK_FILE)
+    except OSError:
+        pass
+    return JSONResponse({"status": "stopped"})
+
+
 async def _api_cleanup(request):
     """Delete old rejected/skipped items from the database."""
     from ..storage.digest import DigestStore
@@ -618,6 +637,7 @@ async def _api_cleanup(request):
 _custom_api = Starlette(routes=[
     Route("/api/pipeline/trigger", _api_pipeline_trigger, methods=["GET"]),
     Route("/api/pipeline/status", _api_pipeline_status, methods=["GET"]),
+    Route("/api/pipeline/force-stop", _api_pipeline_force_stop, methods=["POST"]),
     Route("/api/notion/write", _api_write_notion, methods=["GET"]),
     Route("/api/cleanup", _api_cleanup, methods=["GET"]),
 ])
