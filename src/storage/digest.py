@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS feedback (
     url             TEXT,
     reason          TEXT
 );
+
+CREATE TABLE IF NOT EXISTS dismissed_proposals (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_type       TEXT NOT NULL,
+    proposal_type   TEXT NOT NULL,
+    dismissed_at    TEXT NOT NULL,
+    UNIQUE(item_type, proposal_type)
+);
 """
 
 
@@ -453,6 +461,24 @@ class DigestStore:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Dismissed proposals ─────────────────────────────────────
+
+    def dismiss_proposal(self, item_type: str, proposal_type: str) -> None:
+        """Persist a dismissed rule proposal so it won't reappear."""
+        self._conn.execute(
+            """INSERT OR IGNORE INTO dismissed_proposals
+               (item_type, proposal_type, dismissed_at) VALUES (?, ?, ?)""",
+            (item_type, proposal_type, _now()),
+        )
+        self._conn.commit()
+
+    def get_dismissed_proposals(self) -> set[tuple[str, str]]:
+        """Return set of (item_type, proposal_type) that have been dismissed."""
+        rows = self._conn.execute(
+            "SELECT item_type, proposal_type FROM dismissed_proposals"
+        ).fetchall()
+        return {(r[0], r[1]) for r in rows}
 
     # ── Stats ───────────────────────────────────────────────────
 

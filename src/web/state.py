@@ -154,14 +154,21 @@ class DigestState(rx.State):
             self._load_items()
 
     def _load_rule_proposals(self) -> None:
-        """Load rule proposals from feedback analysis."""
+        """Load rule proposals from feedback analysis, excluding dismissed ones."""
         store = _get_store()
         proc = FeedbackProcessor(store)
-        self.rule_proposals = proc.get_rule_proposals()
+        dismissed = store.get_dismissed_proposals()
+        self.rule_proposals = [
+            p for p in proc.get_rule_proposals()
+            if (p["detail"], p["type"]) not in dismissed
+        ]
 
     def dismiss_proposal(self, index: int) -> None:
-        """Remove a proposal from the list."""
+        """Permanently dismiss a proposal so it won't reappear."""
         if 0 <= index < len(self.rule_proposals):
+            proposal = self.rule_proposals[index]
+            store = _get_store()
+            store.dismiss_proposal(proposal["detail"], proposal["type"])
             self.rule_proposals = [
                 p for i, p in enumerate(self.rule_proposals) if i != index
             ]
