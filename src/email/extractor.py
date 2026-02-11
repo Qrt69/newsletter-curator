@@ -22,7 +22,9 @@ _SKIP_URL_PATTERNS = re.compile(
     r"|email[-_]?preferences|opt[-_]?out|list[-_]?unsubscribe"
     r"|twitter\.com/intent|x\.com/intent"
     r"|facebook\.com/sharer|linkedin\.com/sharing"
-    r"|mailto:|javascript:)",
+    r"|mailto:|javascript:"
+    r"|apps\.apple\.com/|play\.google\.com/store"
+    r"|medium\.com/m/|medium\.com/tag/)",
     re.IGNORECASE,
 )
 
@@ -32,6 +34,73 @@ _DEFAULT_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
+
+# Boilerplate link text patterns (case-insensitive)
+_BOILERPLATE_TEXT = re.compile(
+    r"^(read more|continue reading|read the full"
+    r"|follow|subscribe|sign up|sign in|log in"
+    r"|view in browser|open in app|view online"
+    r"|learn more|click here|download app|get the app"
+    r"|manage preferences|update preferences"
+    r"|share|tweet|post)$",
+    re.IGNORECASE,
+)
+
+
+def _is_boilerplate_text(text: str) -> bool:
+    """Return True if the link text is a known boilerplate phrase."""
+    return bool(_BOILERPLATE_TEXT.match(text.strip()))
+
+
+def _is_non_article_url(url: str) -> bool:
+    """
+    Return True if the URL structurally looks like a non-article page.
+
+    Catches author profiles, publication homepages, tag pages,
+    social media profiles, and app store links.
+    """
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    # Medium: skip profiles (/@user), publication homepages (/pub-name),
+    # tag pages (/tag/*), and internal pages (/m/*)
+    if "medium.com" in hostname:
+        if not segments:
+            return True  # medium.com root
+        if len(segments) == 1:
+            # Single segment = profile (@user) or publication page
+            return True
+        if segments[0] == "tag":
+            return True
+        if segments[0] == "m":
+            return True
+        return False
+
+    # Twitter/X: skip profile pages (no /status/ in path)
+    if hostname in ("twitter.com", "www.twitter.com", "x.com", "www.x.com"):
+        if "/status/" not in path:
+            return True
+        return False
+
+    # LinkedIn: skip /in/ (profiles) and /company/ pages
+    if "linkedin.com" in hostname:
+        if segments and segments[0] in ("in", "company"):
+            return True
+        return False
+
+    # GitHub: skip user/org pages (1 segment, no repo)
+    if hostname in ("github.com", "www.github.com"):
+        if len(segments) <= 1:
+            return True
+        return False
+
+    # App stores (belt-and-suspenders with _SKIP_URL_PATTERNS)
+    if "apps.apple.com" in hostname or "play.google.com" in hostname:
+        return True
+
+    return False
 
 
 class ContentExtractor:
@@ -97,6 +166,14 @@ class ContentExtractor:
             # Get link text, skip image-only or empty anchors
             link_text = a_tag.get_text(strip=True)
             if not link_text:
+                continue
+
+            # Skip boilerplate link text ("Read more", "Follow", etc.)
+            if _is_boilerplate_text(link_text):
+                continue
+
+            # Skip non-article URLs (profiles, tag pages, etc.)
+            if _is_non_article_url(url):
                 continue
 
             # Dedupe within the same email
@@ -257,6 +334,10 @@ class ContentExtractor:
 
         resolved_url, resolve_error = self.resolve_url(source_url)
 
+        # Post-resolution filter: tracking URL may resolve to a non-article page
+        if not resolve_error and _is_non_article_url(resolved_url):
+            return None
+
         if resolve_error:
             return {
                 "source_url": source_url,
@@ -305,6 +386,8 @@ class ContentExtractor:
         items = []
         seen_resolved = set()
         for result in results:
+            if result is None:
+                continue  # Filtered by post-resolution URL check
             resolved_url = result["resolved_url"]
             if resolved_url in seen_resolved:
                 continue

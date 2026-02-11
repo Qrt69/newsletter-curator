@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.email.extractor import ContentExtractor
+from src.email.extractor import ContentExtractor, _is_non_article_url, _is_boilerplate_text
 from src.email.fetcher import EmailFetcher
 
 # Sample newsletter HTML with a mix of real links and boilerplate
@@ -192,12 +192,176 @@ async def test_full_pipeline():
     print("PASS\n")
 
 
+def test_non_article_url_filter():
+    """TEST: _is_non_article_url correctly identifies non-article URLs."""
+    print("=" * 60)
+    print("TEST: Non-article URL filter")
+    print("=" * 60)
+
+    # Should be filtered (non-article)
+    non_articles = [
+        "https://medium.com/@johndoe",
+        "https://medium.com/towards-data-science",
+        "https://medium.com/tag/python",
+        "https://medium.com/m/signin",
+        "https://medium.com",
+        "https://twitter.com/elonmusk",
+        "https://x.com/someuser",
+        "https://www.linkedin.com/in/john-doe",
+        "https://www.linkedin.com/company/anthropic",
+        "https://github.com/anthropics",
+        "https://apps.apple.com/app/some-app/id123456",
+        "https://play.google.com/store/apps/details?id=com.example",
+    ]
+    for url in non_articles:
+        assert _is_non_article_url(url), f"Should filter: {url}"
+        print(f"  FILTERED (correct): {url}")
+
+    # Should NOT be filtered (real articles)
+    articles = [
+        "https://medium.com/@johndoe/my-awesome-article-abc123",
+        "https://medium.com/towards-data-science/some-article-def456",
+        "https://twitter.com/user/status/123456789",
+        "https://x.com/user/status/987654321",
+        "https://www.linkedin.com/pulse/some-article",
+        "https://github.com/anthropics/claude-code",
+        "https://example.com/blog/my-article",
+        "https://docs.python.org/3/library/asyncio.html",
+    ]
+    for url in articles:
+        assert not _is_non_article_url(url), f"Should NOT filter: {url}"
+        print(f"  KEPT (correct):     {url}")
+
+    print("PASS\n")
+
+
+def test_boilerplate_link_text_filter():
+    """TEST: _is_boilerplate_text correctly identifies boilerplate phrases."""
+    print("=" * 60)
+    print("TEST: Boilerplate link text filter")
+    print("=" * 60)
+
+    # Should be filtered
+    boilerplate = [
+        "Read more",
+        "Continue reading",
+        "Follow",
+        "Subscribe",
+        "Sign up",
+        "View in browser",
+        "Open in app",
+        "Learn more",
+        "Click here",
+        "Download app",
+        "SUBSCRIBE",
+        "Share",
+        "Tweet",
+    ]
+    for text in boilerplate:
+        assert _is_boilerplate_text(text), f"Should filter: '{text}'"
+        print(f"  FILTERED (correct): '{text}'")
+
+    # Should NOT be filtered (real article titles)
+    real_titles = [
+        "DuckDB",
+        "7 Underrated Python Libraries You Should Know",
+        "How to Build a RAG Pipeline",
+        "Claude 3.5 Sonnet Released",
+        "The State of AI in 2025",
+        "Read This Before You Deploy",
+        "Following the Money: VC Trends",
+    ]
+    for text in real_titles:
+        assert not _is_boilerplate_text(text), f"Should NOT filter: '{text}'"
+        print(f"  KEPT (correct):     '{text}'")
+
+    print("PASS\n")
+
+
+def test_parse_links_medium_newsletter():
+    """TEST: parse_links filters Medium newsletter HTML correctly."""
+    print("=" * 60)
+    print("TEST: Parse links from Medium-style newsletter")
+    print("=" * 60)
+
+    medium_html = """
+    <html><body>
+    <h1>Weekly Digest</h1>
+
+    <!-- Real articles (should survive) -->
+    <a href="https://medium.com/@author1/amazing-python-tips-abc123">Amazing Python Tips</a>
+    <a href="https://medium.com/towards-data-science/rag-pipeline-guide-def456">RAG Pipeline Guide</a>
+    <a href="https://github.com/anthropics/claude-code">Claude Code</a>
+    <a href="https://example.com/blog/great-article">A Great Article on Testing</a>
+
+    <!-- Author profiles (should be filtered) -->
+    <a href="https://medium.com/@author1">Author One</a>
+    <a href="https://medium.com/@author2">Author Two</a>
+
+    <!-- Publication pages (should be filtered) -->
+    <a href="https://medium.com/towards-data-science">Towards Data Science</a>
+    <a href="https://medium.com/better-programming">Better Programming</a>
+
+    <!-- Tag pages (should be filtered) -->
+    <a href="https://medium.com/tag/python">Python</a>
+    <a href="https://medium.com/tag/machine-learning">Machine Learning</a>
+
+    <!-- Social profiles (should be filtered) -->
+    <a href="https://twitter.com/someauthor">Follow on Twitter</a>
+    <a href="https://www.linkedin.com/in/some-person">LinkedIn Profile</a>
+    <a href="https://github.com/someuser">GitHub Profile</a>
+
+    <!-- Boilerplate text (should be filtered) -->
+    <a href="https://example.com/some-page">Read more</a>
+    <a href="https://example.com/another-page">Subscribe</a>
+    <a href="https://example.com/yet-another">Follow</a>
+    <a href="https://example.com/app">Open in app</a>
+
+    <!-- Already caught by _SKIP_URL_PATTERNS -->
+    <a href="https://example.com/unsubscribe">Unsubscribe</a>
+    <a href="https://medium.com/m/signin">Sign in</a>
+    </body></html>
+    """
+
+    extractor = ContentExtractor()
+    links = extractor.parse_links(medium_html)
+
+    print(f"  Found {len(links)} link(s):")
+    for link in links:
+        print(f"    - {link['link_text'][:40]:40s} -> {link['url'][:60]}")
+
+    urls = [l["url"] for l in links]
+    texts = [l["link_text"] for l in links]
+
+    # Should keep the 4 real article links
+    assert len(links) == 4, f"Expected 4 links, got {len(links)}: {urls}"
+    assert any("amazing-python-tips" in u for u in urls), "Should keep article link"
+    assert any("rag-pipeline-guide" in u for u in urls), "Should keep article link"
+    assert any("claude-code" in u for u in urls), "Should keep GitHub repo link"
+    assert any("great-article" in u for u in urls), "Should keep blog link"
+
+    # Should NOT have any profiles, tags, or boilerplate
+    assert not any("medium.com/@author1" == u for u in urls), "Should filter author profile"
+    assert not any("medium.com/tag/" in u for u in urls), "Should filter tag pages"
+    assert not any("twitter.com/someauthor" == u.rstrip("/") for u in urls), "Should filter Twitter profile"
+    assert "Read more" not in texts, "Should filter boilerplate text"
+    assert "Subscribe" not in texts, "Should filter boilerplate text"
+
+    extractor.close()
+    print("PASS\n")
+
+
 def main():
     # Sync tests
     test_parse_links()
     test_resolve_url()
     test_extract_article()
     test_bad_url()
+
+    # New filter tests
+    test_non_article_url_filter()
+    test_boilerplate_link_text_filter()
+    test_parse_links_medium_newsletter()
 
     # Async test (needs EmailFetcher)
     asyncio.run(test_full_pipeline())

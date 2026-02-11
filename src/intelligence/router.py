@@ -90,7 +90,11 @@ class Router:
             same_db = any(m["database"] == target_db for m in matches)
             if same_db:
                 decision["dedup_status"] = "duplicate"
-                decision["action"] = "skip"
+                if scored_item.get("source_article"):
+                    # Listicle sub-item: show in UI so user sees dedup status
+                    decision["action"] = "review"
+                else:
+                    decision["action"] = "skip"
             else:
                 decision["dedup_status"] = "update_candidate"
                 decision["action"] = "review"
