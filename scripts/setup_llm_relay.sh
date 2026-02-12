@@ -9,14 +9,14 @@
 #   This script sets up socat to forward VPS port 11234 -> your PC's LM Studio.
 #
 # How it works:
-#   Docker container -> host.docker.internal:11234 -> socat -> Tailscale -> your PC:1234
+#   Docker container -> 172.17.0.1:11234 -> socat -> Tailscale -> your PC:1234
 #
 # Usage:
 #   sudo bash scripts/setup_llm_relay.sh
 #
 # After running this:
 #   - socat runs as a systemd service (starts on boot)
-#   - Docker containers can reach LM Studio at http://host.docker.internal:11234/v1
+#   - Docker containers can reach LM Studio at http://172.17.0.1:11234/v1
 #
 # =============================================================================
 
@@ -52,7 +52,7 @@ Wants=tailscaled.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/socat TCP-LISTEN:$RELAY_PORT,fork,reuseaddr TCP:$TAILSCALE_IP:$LM_STUDIO_PORT
+ExecStart=/usr/bin/socat TCP-LISTEN:$RELAY_PORT,bind=0.0.0.0,fork,reuseaddr TCP:$TAILSCALE_IP:$LM_STUDIO_PORT
 Restart=always
 RestartSec=5
 

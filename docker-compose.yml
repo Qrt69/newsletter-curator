@@ -3,13 +3,11 @@ services:
     build: .
     ports:
       - "8080:8080"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
-      - LLM_BASE_URL=http://host.docker.internal:11234/v1
+      - LLM_BASE_URL=http://172.17.0.1:11234/v1
     volumes:
       - app-data:/data
     restart: unless-stopped
@@ -17,13 +15,11 @@ services:
   scheduler:
     build: .
     command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
-      - LLM_BASE_URL=http://host.docker.internal:11234/v1
+      - LLM_BASE_URL=http://172.17.0.1:11234/v1
     volumes:
       - app-data:/data
     restart: unless-stopped
