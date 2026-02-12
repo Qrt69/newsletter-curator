@@ -1,8 +1,11 @@
 """
 Scorer for Newsletter Curator.
 
-Uses Claude API to evaluate newsletter items against Kurt's interest
-profile, producing a score, verdict, item type, and reasoning.
+Supports two backends:
+  - "local"     (default): LM Studio or any OpenAI-compatible local server
+  - "anthropic": Claude API via the Anthropic SDK
+
+Set SCORER_BACKEND env var to choose (default: "local").
 """
 
 import json
@@ -13,6 +16,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
+import openai
 
 from .prompts import SCORER_SYSTEM_PROMPT, format_user_prompt
 
@@ -25,35 +29,54 @@ _VALID_ITEM_TYPES = {
     "infra_reference",
 }
 
+# Defaults for local LM Studio backend
+_DEFAULT_LLM_BASE_URL = "http://localhost:1234/v1"
+_DEFAULT_LLM_API_KEY = "lm-studio"
+
 
 class Scorer:
     """
-    Scores newsletter items using Claude API.
+    Scores newsletter items using an LLM backend.
 
     Usage:
-        scorer = Scorer()
+        scorer = Scorer()                   # uses local LM Studio by default
+        scorer = Scorer(backend="anthropic") # uses Claude API
         result = scorer.score_item(item)
         print(result["verdict"], result["score"])
     """
 
     def __init__(
         self,
+        backend: str | None = None,
         api_key: str | None = None,
-        model: str = "claude-sonnet-4-5-20250929",
+        model: str | None = None,
         max_text_chars: int = 3000,
         max_retries: int = 2,
         feedback_examples: str = "",
     ):
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError(
-                "ANTHROPIC_API_KEY not found. Pass api_key= or set the env var."
-            )
-        self._client = anthropic.Anthropic(api_key=key)
-        self._model = model
+        self._backend = backend or os.environ.get("SCORER_BACKEND", "local")
         self._max_text_chars = max_text_chars
         self._max_retries = max_retries
         self._feedback_examples = feedback_examples
+
+        if self._backend == "anthropic":
+            key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+            if not key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY not found. Pass api_key= or set the env var."
+                )
+            self._anthropic_client = anthropic.Anthropic(api_key=key)
+            self._openai_client = None
+            self._model = model or "claude-sonnet-4-5-20250929"
+        else:
+            # Local (LM Studio / OpenAI-compatible)
+            base_url = os.environ.get("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL)
+            llm_key = api_key or os.environ.get("LLM_API_KEY", _DEFAULT_LLM_API_KEY)
+            self._openai_client = openai.OpenAI(base_url=base_url, api_key=llm_key)
+            self._anthropic_client = None
+            self._model = model or os.environ.get("LLM_MODEL", "")
+            if not self._model:
+                self._model = self._auto_detect_model()
 
         # Token usage tracking (guarded by _lock for thread safety)
         self._lock = threading.Lock()
@@ -62,11 +85,70 @@ class Scorer:
         self._items_scored = 0
         self._errors = 0
 
+    def _auto_detect_model(self) -> str:
+        """Query the local server for available models and pick the first one."""
+        try:
+            models = self._openai_client.models.list()
+            if models.data:
+                model_id = models.data[0].id
+                print(f"  [Scorer] Auto-detected local model: {model_id}")
+                return model_id
+        except Exception as exc:
+            raise ConnectionError(
+                f"Cannot reach LM Studio at {self._openai_client.base_url}. "
+                f"Start LM Studio and load a model, or set SCORER_BACKEND=anthropic. "
+                f"Error: {exc}"
+            ) from exc
+        raise ConnectionError(
+            f"LM Studio at {self._openai_client.base_url} has no models loaded. "
+            "Load a model in LM Studio first."
+        )
+
+    # ── LLM call abstraction ───────────────────────────────────
+
+    def _call_llm(
+        self, system_prompt: str, user_prompt: str
+    ) -> tuple[str, int, int]:
+        """
+        Call the configured LLM backend.
+
+        Returns:
+            (raw_text, input_tokens, output_tokens)
+        """
+        if self._backend == "anthropic":
+            response = self._anthropic_client.messages.create(
+                model=self._model,
+                max_tokens=512,
+                temperature=0.2,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return (
+                response.content[0].text,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+            )
+        else:
+            response = self._openai_client.chat.completions.create(
+                model=self._model,
+                max_tokens=512,
+                temperature=0.2,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            raw_text = response.choices[0].message.content or ""
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+            return raw_text, input_tokens, output_tokens
+
     # ── Public methods ─────────────────────────────────────────
 
     def score_item(self, item: dict) -> dict:
         """
-        Score a single item via Claude API.
+        Score a single item via the configured LLM backend.
 
         Args:
             item: Dict from ContentExtractor (has url, link_text, title, text, etc.)
@@ -85,15 +167,8 @@ class Scorer:
         last_error = None
         for attempt in range(self._max_retries + 1):
             try:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=512,
-                    temperature=0.2,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
-                )
+                raw_text, in_tok, out_tok = self._call_llm(system_prompt, user_prompt)
 
-                raw_text = response.content[0].text
                 result = self._parse_response(raw_text)
                 result["url"] = url
                 result["link_text"] = link_text
@@ -108,8 +183,8 @@ class Scorer:
 
                 # Track token usage (thread-safe)
                 with self._lock:
-                    self._total_input_tokens += response.usage.input_tokens
-                    self._total_output_tokens += response.usage.output_tokens
+                    self._total_input_tokens += in_tok
+                    self._total_output_tokens += out_tok
                     self._items_scored += 1
                 return result
 
@@ -117,7 +192,7 @@ class Scorer:
                 last_error = str(exc)
                 if attempt < self._max_retries:
                     continue
-            except anthropic.APIError as exc:
+            except (anthropic.APIError, openai.APIError, openai.APIConnectionError) as exc:
                 last_error = str(exc)
                 break
 
@@ -128,7 +203,7 @@ class Scorer:
     def score_batch(
         self,
         items: list[dict],
-        max_workers: int = 4,
+        max_workers: int | None = None,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> list[dict]:
         """
@@ -136,12 +211,16 @@ class Scorer:
 
         Args:
             items: List of dicts from ContentExtractor.
-            max_workers: Number of concurrent scoring threads (default 4).
+            max_workers: Number of concurrent scoring threads.
+                         Defaults to 1 for local backend, 4 for anthropic.
             on_progress: Optional callback(current, total) called after each item is scored.
 
         Returns:
             List of scored dicts (same order as input).
         """
+        if max_workers is None:
+            max_workers = 1 if self._backend == "local" else 4
+
         total = len(items)
 
         def _score_one(args: tuple[int, dict]) -> dict:
@@ -166,6 +245,8 @@ class Scorer:
     def stats(self) -> dict:
         """Return token usage and scoring statistics."""
         return {
+            "backend": self._backend,
+            "model": self._model,
             "items_scored": self._items_scored,
             "errors": self._errors,
             "total_input_tokens": self._total_input_tokens,

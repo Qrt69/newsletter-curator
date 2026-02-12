@@ -4,9 +4,12 @@ Integration tests for the Scorer.
 Tests JSON parsing, scoring of different item types, no-text fallback,
 and batch scoring with token usage tracking.
 
+Supports both backends via SCORER_BACKEND env var (default: "local").
+
 Run: uv run python tests/test_scorer.py
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +19,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 from src.intelligence.scorer import Scorer
+
+# Read backend from env (tests follow the configured backend)
+_BACKEND = os.environ.get("SCORER_BACKEND", "local")
 
 
 # ── Test 1: Parse response (unit test, no API call) ───────────
@@ -79,10 +86,10 @@ def test_parse_response():
 def test_score_python_library():
     """TEST 2: Score Pydantic - expect strong_fit or likely_fit, score >= 3."""
     print("=" * 60)
-    print("TEST 2: Score Python library (Pydantic)")
+    print(f"TEST 2: Score Python library (Pydantic) [backend={_BACKEND}]")
     print("=" * 60)
 
-    scorer = Scorer()
+    scorer = Scorer(backend=_BACKEND)
     item = {
         "resolved_url": "https://github.com/pydantic/pydantic",
         "link_text": "Pydantic v2.10 - Data validation using Python type hints",
@@ -129,10 +136,10 @@ def test_score_python_library():
 def test_score_frontend_framework():
     """TEST 3: Score React - expect reject, score <= 0."""
     print("=" * 60)
-    print("TEST 3: Score frontend framework (React)")
+    print(f"TEST 3: Score frontend framework (React) [backend={_BACKEND}]")
     print("=" * 60)
 
-    scorer = Scorer()
+    scorer = Scorer(backend=_BACKEND)
     item = {
         "resolved_url": "https://react.dev/blog/2025/02/react-19",
         "link_text": "React 19 is here - New hooks and server components",
@@ -171,10 +178,10 @@ def test_score_frontend_framework():
 def test_score_no_text():
     """TEST 4: Score a RAG tool with no text - should still produce a result."""
     print("=" * 60)
-    print("TEST 4: Score item with no extracted text")
+    print(f"TEST 4: Score item with no extracted text [backend={_BACKEND}]")
     print("=" * 60)
 
-    scorer = Scorer()
+    scorer = Scorer(backend=_BACKEND)
     item = {
         "resolved_url": "https://github.com/cognee-ai/cognee",
         "link_text": "Cognee - Build and manage RAG knowledge graphs with Python",
@@ -206,10 +213,10 @@ def test_score_no_text():
 def test_score_batch():
     """TEST 5: Score 3 items in batch, verify stats."""
     print("=" * 60)
-    print("TEST 5: Score batch (3 items)")
+    print(f"TEST 5: Score batch (3 items) [backend={_BACKEND}]")
     print("=" * 60)
 
-    scorer = Scorer()
+    scorer = Scorer(backend=_BACKEND)
     items = [
         {
             "resolved_url": "https://github.com/duckdb/duckdb",
@@ -245,9 +252,9 @@ def test_score_batch():
     for key, val in stats.items():
         print(f"    {key}: {val}")
 
+    assert stats["backend"] == _BACKEND
+    assert stats["model"], "Model should be set"
     assert stats["items_scored"] == 3, f"Expected 3 items scored, got {stats['items_scored']}"
-    assert stats["total_input_tokens"] > 0, "Should have input tokens"
-    assert stats["total_output_tokens"] > 0, "Should have output tokens"
     assert stats["total_tokens"] == stats["total_input_tokens"] + stats["total_output_tokens"]
 
     print("PASS\n")
@@ -256,10 +263,12 @@ def test_score_batch():
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
+    print(f"Running scorer tests with backend={_BACKEND}\n")
+
     # Unit test (no API call)
     test_parse_response()
 
-    # Integration tests (require ANTHROPIC_API_KEY)
+    # Integration tests (require LM Studio running or ANTHROPIC_API_KEY)
     test_score_python_library()
     test_score_frontend_framework()
     test_score_no_text()

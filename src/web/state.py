@@ -6,6 +6,7 @@ Event handlers load data from SQLite, handle accept/reject/edit.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import os
 import threading
 import time
@@ -58,6 +59,7 @@ class DigestState(rx.State):
     pipeline_running: bool = False
     pipeline_status: str = ""
     _force_stopped: bool = False
+    _auto_triggered: bool = False
 
     # Notion write
     writing_to_notion: bool = False
@@ -156,8 +158,25 @@ class DigestState(rx.State):
                     self.selected_run_id = self.runs[0]["id"]
                     self._load_items()
 
-    def load_runs(self) -> None:
-        """Load all runs from the database."""
+    def _is_run_overdue(self) -> bool:
+        """Check if the last run is more than 7 days old (or no runs exist)."""
+        if not self.runs:
+            return True
+        try:
+            last_run_time = self.runs[0].get("started_at", "")
+            if not last_run_time:
+                return True
+            # Parse ISO 8601 timestamp
+            dt = datetime.fromisoformat(last_run_time)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - dt
+            return age.total_seconds() > 7 * 24 * 3600
+        except (ValueError, TypeError):
+            return False
+
+    def load_runs(self):
+        """Load all runs from the database. Auto-triggers pipeline if overdue."""
         self.check_pipeline_status()
         store = _get_store()
         # Silent cleanup of old rejected/skipped items on page load
@@ -167,6 +186,13 @@ class DigestState(rx.State):
         if self.runs and self.selected_run_id == 0:
             self.selected_run_id = self.runs[0]["id"]
             self._load_items()
+
+        # Auto-trigger pipeline if last run is >7 days old
+        if not self._auto_triggered and not self.pipeline_running:
+            if self._is_run_overdue():
+                self._auto_triggered = True
+                self.pipeline_status = "Auto-triggered (last run >7 days ago)"
+                return DigestState.trigger_pipeline
 
     def _load_rule_proposals(self) -> None:
         """Load rule proposals from feedback analysis, excluding dismissed ones."""

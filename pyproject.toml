@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "msgraph-sdk>=1.54.0",
     "notion-client>=2.7.0",
+    "openai>=1.0.0",
     "playwright>=1.40.0",
     "python-dotenv>=1.2.1",
     "rapidfuzz>=3.0.0",
