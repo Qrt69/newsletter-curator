@@ -1,8 +1,7 @@
 services:
   web:
     build: .
-    ports:
-      - "8080:8080"
+    network_mode: host
     env_file: .env
     environment:
       - DATA_DIR=/data
@@ -14,7 +13,7 @@ services:
 
   scheduler:
     build: .
-    command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
+    network_mode: host
     env_file: .env
     environment:
       - DATA_DIR=/data
