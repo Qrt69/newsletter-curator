@@ -1,24 +1,28 @@
 services:
   web:
     build: .
-    network_mode: host
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
-      - LLM_BASE_URL=http://100.104.116.6:1234/v1
+      - LLM_BASE_URL=http://host.docker.internal:11234/v1
     volumes:
       - app-data:/data
     restart: unless-stopped
 
   scheduler:
     build: .
-    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file: .env
     environment:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
-      - LLM_BASE_URL=http://100.104.116.6:1234/v1
+      - LLM_BASE_URL=http://host.docker.internal:11234/v1
     volumes:
       - app-data:/data
     restart: unless-stopped
