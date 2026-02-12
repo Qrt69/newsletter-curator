@@ -113,7 +113,24 @@ def items_table() -> rx.Component:
     return rx.table.root(
         rx.table.header(
             rx.table.row(
-                rx.table.column_header_cell("Score"),
+                rx.table.column_header_cell(
+                    rx.hstack(
+                        rx.text("Score"),
+                        rx.cond(
+                            DigestState.sort_by_score == "desc",
+                            rx.text("v", size="1", color="blue"),
+                            rx.cond(
+                                DigestState.sort_by_score == "asc",
+                                rx.text("^", size="1", color="blue"),
+                                rx.fragment(),
+                            ),
+                        ),
+                        align="center",
+                        spacing="1",
+                        cursor="pointer",
+                        on_click=DigestState.toggle_sort_score,
+                    ),
+                ),
                 rx.table.column_header_cell("Name"),
                 rx.table.column_header_cell("Type"),
                 rx.table.column_header_cell("Database"),

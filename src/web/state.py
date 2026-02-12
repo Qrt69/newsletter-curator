@@ -38,6 +38,7 @@ class DigestState(rx.State):
     items: list[dict] = []
     pending_count: int = 0
     show_all_items: bool = False
+    sort_by_score: str = ""  # "", "desc", or "asc"
     total_count: int = 0
 
     # Detail dialog
@@ -197,6 +198,16 @@ class DigestState(rx.State):
         self.show_all_items = checked
         self._load_items()
 
+    def toggle_sort_score(self) -> None:
+        """Cycle score sort: unsorted -> desc -> asc -> unsorted."""
+        if self.sort_by_score == "":
+            self.sort_by_score = "desc"
+        elif self.sort_by_score == "desc":
+            self.sort_by_score = "asc"
+        else:
+            self.sort_by_score = ""
+        self._load_items()
+
     def write_to_notion(self):
         """Write accepted items for the selected run to Notion (generator for live updates)."""
         if self.selected_run_id == 0 or self.writing_to_notion:
@@ -261,6 +272,10 @@ class DigestState(rx.State):
                 if i.get("action") == "propose"
                 and i.get("user_decision") is None
             ]
+        if self.sort_by_score == "desc":
+            self.items.sort(key=lambda i: i.get("score", 0), reverse=True)
+        elif self.sort_by_score == "asc":
+            self.items.sort(key=lambda i: i.get("score", 0))
         self.pending_count = len(self.items)
         self._update_accepted_count()
 
