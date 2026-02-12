@@ -16,6 +16,7 @@ services:
 
   scheduler:
     build: .
+    command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file: .env
