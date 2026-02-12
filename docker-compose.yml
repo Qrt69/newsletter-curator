@@ -6,6 +6,7 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/data
+      - SCORER_BACKEND=anthropic
     volumes:
       - app-data:/data
     restart: unless-stopped
@@ -16,6 +17,7 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/data
+      - SCORER_BACKEND=anthropic
     volumes:
       - app-data:/data
     restart: unless-stopped
