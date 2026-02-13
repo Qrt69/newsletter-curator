@@ -26,7 +26,7 @@ _SKIP_URL_PATTERNS = re.compile(
     r"|apps\.apple\.com/|play\.google\.com/store"
     r"|medium\.com/m/|medium\.com/tag/"
     # Newsletter platforms
-    r"|substack\.com/$|substack\.com/\?|beehiiv\.com"
+    r"|substack\.com/$|substack\.com/\?"
     r"|convertkit\.com|mailchimp\.com|campaign-archive"
     # Sponsor/referral tracking
     r"|sparkloop\.app|swapstack\.co|refind\.com"
@@ -139,8 +139,11 @@ def _is_non_article_url(url: str) -> bool:
             return False
         return True
 
-    # Beehiiv: skip internal pages (only keep /p/ article paths)
+    # Beehiiv: tracking subdomains (link.mail.beehiiv.com) are redirects — let them through.
+    # Only filter actual publication pages (keep /p/ article paths).
     if "beehiiv.com" in hostname:
+        if hostname.startswith(("link.", "mail.")):
+            return False  # tracking redirect, will be resolved later
         if segments and segments[0] == "p":
             return False
         return True
