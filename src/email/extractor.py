@@ -35,6 +35,8 @@ _SKIP_URL_PATTERNS = re.compile(
     r"|t\.me/|slack\.com/|chat\.whatsapp\.com"
     # Event platforms
     r"|meetup\.com|eventbrite\.com|lu\.ma/|tito\.io"
+    # Help/support pages
+    r"|help\.medium\.com|help\.substack\.com|/help[-_]?center|/faq\b|/support\b|zendesk\.com"
     # Feeds
     r"|/feed$|/rss$|/atom\.xml)",
     re.IGNORECASE,
@@ -68,7 +70,9 @@ _BOILERPLATE_TEXT = re.compile(
     # Newsletter actions
     r"|unsubscribe|view online|refer a friend|share this"
     # Footer/generic
-    r"|here|click|powered by.*|beehiiv|submit)$",
+    r"|here|click|powered by.*|beehiiv|submit"
+    # Help/support
+    r"|help center|help centre|faq|support|knowledge base)$",
     re.IGNORECASE,
 )
 
