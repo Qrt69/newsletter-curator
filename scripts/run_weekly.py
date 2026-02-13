@@ -147,18 +147,34 @@ async def _run_pipeline_inner():
     run_id = store.create_run(emails_fetched=len(emails))
     print(f"  Run ID: {run_id}")
 
-    # 1b. Ensure browser session for Medium/Beehiiv
+    # 1b. Quick-scan emails for Medium/Beehiiv links before attempting login
     skip_browser = os.environ.get("SKIP_BROWSER_LOGIN", "").lower() in ("1", "true", "yes")
     if skip_browser:
         print("\n[1b] Browser login skipped (SKIP_BROWSER_LOGIN is set)")
         browser_fetcher = BrowserFetcher()
     else:
-        _write_progress("Checking browser session...")
-        print("\n[1b] Checking browser session for Medium/Beehiiv...")
-        session = BrowserSession(fetcher)
-        logged_in = await session.ensure_logged_in()
-        browser_fetcher = BrowserFetcher(state_path=session.state_path) if logged_in else BrowserFetcher()
-        print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
+        from src.email.browser import needs_browser
+        from src.email.extractor import ContentExtractor as _CE
+        _scanner = _CE()
+        has_browser_links = False
+        for email in emails:
+            for link in _scanner.parse_links(email["body_html"]):
+                if needs_browser(link["url"]):
+                    has_browser_links = True
+                    break
+            if has_browser_links:
+                break
+
+        if has_browser_links:
+            _write_progress("Checking browser session...")
+            print("\n[1b] Medium/Beehiiv links found, checking browser session...")
+            session = BrowserSession(fetcher)
+            logged_in = await session.ensure_logged_in()
+            browser_fetcher = BrowserFetcher(state_path=session.state_path) if logged_in else BrowserFetcher()
+            print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
+        else:
+            print("\n[1b] No Medium/Beehiiv links found, skipping browser login")
+            browser_fetcher = BrowserFetcher()
 
     # 2. Extract content
     _write_progress("Extracting content...")
