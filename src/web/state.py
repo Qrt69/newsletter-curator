@@ -208,14 +208,15 @@ class DigestState(rx.State):
             self.sort_by_score = ""
         self._load_items()
 
-    def write_to_notion(self):
-        """Write accepted items for the selected run to Notion (generator for live updates)."""
-        if self.selected_run_id == 0 or self.writing_to_notion:
-            return
-
-        self.writing_to_notion = True
-        self.write_status = "Writing..."
-        yield
+    @rx.event(background=True)
+    async def write_to_notion(self):
+        """Write accepted items for the selected run to Notion (background task)."""
+        async with self:
+            if self.selected_run_id == 0 or self.writing_to_notion:
+                return
+            self.writing_to_notion = True
+            self.write_status = "Writing..."
+            run_id = self.selected_run_id
 
         import sys
         from pathlib import Path
@@ -223,21 +224,23 @@ class DigestState(rx.State):
         from scripts.run_weekly import write_accepted
 
         try:
-            result = write_accepted(self.selected_run_id)
+            result = write_accepted(run_id)
             created = result.get("created", 0) if isinstance(result, dict) else 0
             failed = result.get("failed", 0) if isinstance(result, dict) else 0
-            if failed:
-                errors = result.get("errors", []) if isinstance(result, dict) else []
-                error_detail = "; ".join(errors) if errors else "unknown error"
-                self.write_status = f"Done: {created} created, {failed} failed — {error_detail}"
-            else:
-                self.write_status = f"Written to Notion! ({created} items)"
+            async with self:
+                if failed:
+                    errors = result.get("errors", []) if isinstance(result, dict) else []
+                    error_detail = "; ".join(errors) if errors else "unknown error"
+                    self.write_status = f"Done: {created} created, {failed} failed — {error_detail}"
+                else:
+                    self.write_status = f"Written to Notion! ({created} items)"
         except Exception as exc:
-            self.write_status = f"Error: {exc}"
+            async with self:
+                self.write_status = f"Error: {exc}"
 
-        self.writing_to_notion = False
-        self._update_accepted_count()
-        yield
+        async with self:
+            self.writing_to_notion = False
+            self._update_accepted_count()
 
     def _update_accepted_count(self) -> None:
         """Count accepted items not yet written to Notion."""

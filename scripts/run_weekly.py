@@ -148,12 +148,17 @@ async def _run_pipeline_inner():
     print(f"  Run ID: {run_id}")
 
     # 1b. Ensure browser session for Medium/Beehiiv
-    _write_progress("Checking browser session...")
-    print("\n[1b] Checking browser session for Medium/Beehiiv...")
-    session = BrowserSession(fetcher)
-    logged_in = await session.ensure_logged_in()
-    browser_fetcher = BrowserFetcher(state_path=session.state_path) if logged_in else BrowserFetcher()
-    print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
+    skip_browser = os.environ.get("SKIP_BROWSER_LOGIN", "").lower() in ("1", "true", "yes")
+    if skip_browser:
+        print("\n[1b] Browser login skipped (SKIP_BROWSER_LOGIN is set)")
+        browser_fetcher = BrowserFetcher()
+    else:
+        _write_progress("Checking browser session...")
+        print("\n[1b] Checking browser session for Medium/Beehiiv...")
+        session = BrowserSession(fetcher)
+        logged_in = await session.ensure_logged_in()
+        browser_fetcher = BrowserFetcher(state_path=session.state_path) if logged_in else BrowserFetcher()
+        print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
 
     # 2. Extract content
     _write_progress("Extracting content...")

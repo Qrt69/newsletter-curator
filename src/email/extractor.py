@@ -237,40 +237,69 @@ class ContentExtractor:
         seen_urls = set()
         links = []
 
-        for a_tag in soup.find_all("a", href=True):
+        all_a_tags = soup.find_all("a", href=True)
+        skipped = {"no_text": 0, "boilerplate_url": 0, "boilerplate_text": 0,
+                    "non_article": 0, "non_http": 0, "empty": 0, "dupe": 0}
+
+        for a_tag in all_a_tags:
             url = a_tag["href"].strip()
 
             # Skip empty, anchor-only, mailto, javascript
             if not url or url.startswith("#"):
+                skipped["empty"] += 1
                 continue
 
             # Skip boilerplate patterns
             if _SKIP_URL_PATTERNS.search(url):
+                skipped["boilerplate_url"] += 1
                 continue
 
             # Must be http/https
             if not url.startswith(("http://", "https://")):
+                skipped["non_http"] += 1
                 continue
 
             # Get link text, skip image-only or empty anchors
             link_text = a_tag.get_text(strip=True)
             if not link_text:
+                skipped["no_text"] += 1
                 continue
 
             # Skip boilerplate link text ("Read more", "Follow", etc.)
             if _is_boilerplate_text(link_text):
+                skipped["boilerplate_text"] += 1
                 continue
 
             # Skip non-article URLs (profiles, tag pages, etc.)
             if _is_non_article_url(url):
+                skipped["non_article"] += 1
                 continue
 
             # Dedupe within the same email
             if url in seen_urls:
+                skipped["dupe"] += 1
                 continue
             seen_urls.add(url)
 
             links.append({"url": url, "link_text": link_text})
+
+        # Diagnostic logging when no links survive filtering
+        if not links and all_a_tags:
+            total = len(all_a_tags)
+            print(f"    [debug] {total} <a> tags found, all filtered out: {skipped}")
+            # Show first 5 filtered URLs for diagnosis
+            shown = 0
+            for a_tag in all_a_tags:
+                href = a_tag.get("href", "").strip()
+                text = a_tag.get_text(strip=True)[:60]
+                if href and href.startswith("http"):
+                    print(f"    [debug]   {href[:100]} | text='{text}'")
+                    shown += 1
+                    if shown >= 5:
+                        break
+        elif not all_a_tags:
+            body_len = len(body_html) if body_html else 0
+            print(f"    [debug] No <a> tags found in email body ({body_len} chars)")
 
         return links
 
