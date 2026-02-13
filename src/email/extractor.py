@@ -165,9 +165,10 @@ def _is_non_article_url(url: str) -> bool:
             return True
         return False
 
-    # Substack: only allow /p/ (actual posts)
+    # Substack: tracking redirects (/redirect/) are real article links — let them through.
+    # Only allow /p/ (actual posts) and /redirect/ (tracking URLs resolved later).
     if "substack.com" in hostname:
-        if segments and segments[0] == "p":
+        if segments and segments[0] in ("p", "redirect"):
             return False
         return True
 
