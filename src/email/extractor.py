@@ -33,6 +33,8 @@ _SKIP_URL_PATTERNS = re.compile(
     # Community/chat invites
     r"|discord\.gg/|discord\.com/invite/"
     r"|t\.me/|slack\.com/|chat\.whatsapp\.com"
+    # Event platforms
+    r"|meetup\.com|eventbrite\.com|lu\.ma/|tito\.io"
     # Feeds
     r"|/feed$|/rss$|/atom\.xml)",
     re.IGNORECASE,
@@ -64,7 +66,9 @@ _BOILERPLATE_TEXT = re.compile(
     # Legal/misc
     r"|privacy|privacy policy|terms|terms of service|rss|podcast"
     # Newsletter actions
-    r"|unsubscribe|view online|refer a friend|share this)$",
+    r"|unsubscribe|view online|refer a friend|share this"
+    # Footer/generic
+    r"|here|click|powered by.*|beehiiv|submit)$",
     re.IGNORECASE,
 )
 
@@ -74,7 +78,31 @@ def _is_boilerplate_text(text: str) -> bool:
     stripped = text.strip()
     if len(stripped) <= 2:
         return True
-    return bool(_BOILERPLATE_TEXT.match(stripped))
+    if _BOILERPLATE_TEXT.match(stripped):
+        return True
+    # Link text that is just a URL
+    if stripped.startswith(("http://", "https://")):
+        return True
+    # Event/meetup links (partial match)
+    if _EVENT_TEXT.search(stripped):
+        return True
+    # Cross-promo newsletter links ("Programmer Weekly", "Founder Weekly", etc.)
+    if _NEWSLETTER_PROMO_TEXT.match(stripped):
+        return True
+    return False
+
+
+# Event/meetup link text (partial match — anywhere in the text)
+_EVENT_TEXT = re.compile(
+    r"\b(meetup|user group|hackathon)\b",
+    re.IGNORECASE,
+)
+
+# Cross-promotion newsletter names ("X Weekly", "X Digest", "X Newsletter")
+_NEWSLETTER_PROMO_TEXT = re.compile(
+    r"^.+\s+(weekly|digest|newsletter|bulletin)$",
+    re.IGNORECASE,
+)
 
 
 # Patterns that indicate a site error page rather than real content
