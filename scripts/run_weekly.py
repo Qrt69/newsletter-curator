@@ -216,7 +216,7 @@ async def _run_pipeline_inner(model: str | None = None):
     else:
         print("  No feedback overrides to inject")
 
-    max_text = int(os.environ.get("SCORER_MAX_TEXT_CHARS", "2000"))
+    max_text = int(os.environ.get("SCORER_MAX_TEXT_CHARS", "3000"))
     scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
     if model:
         print(f"  Using model: {model}")
