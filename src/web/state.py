@@ -10,6 +10,7 @@ import os
 import threading
 import time
 
+import httpx
 import reflex as rx
 
 from ..storage.digest import DigestStore
@@ -54,6 +55,11 @@ class DigestState(rx.State):
     # Rule proposals from feedback analysis
     rule_proposals: list[dict] = []
 
+    # Model selector
+    selected_model: str = ""
+    available_models: list[str] = []
+    models_loading: bool = False
+
     # Pipeline trigger
     pipeline_running: bool = False
     pipeline_status: str = ""
@@ -80,6 +86,24 @@ class DigestState(rx.State):
                 return f.read().strip()
         except OSError:
             return ""
+
+    def fetch_models(self) -> None:
+        """Fetch available models from LM Studio /v1/models endpoint."""
+        self.models_loading = True
+        base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
+        try:
+            resp = httpx.get(f"{base_url}/models", timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            models = [m["id"] for m in data.get("data", []) if m.get("id")]
+            self.available_models = sorted(models)
+        except Exception:
+            self.available_models = []
+        self.models_loading = False
+
+    def set_selected_model(self, value: str) -> None:
+        """Set the selected model for the next pipeline run."""
+        self.selected_model = value
 
     def check_pipeline_status(self) -> None:
         """Check if pipeline is still running (via lock file)."""
@@ -121,15 +145,16 @@ class DigestState(rx.State):
             self.pipeline_running = True
             self.pipeline_status = "Running..."
             self._force_stopped = False
+            model = self.selected_model
 
-        def _run_in_thread():
+        def _run_in_thread(model_name: str):
             import sys
             from pathlib import Path
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
             from scripts.run_weekly import run_pipeline
-            asyncio.run(run_pipeline())
+            asyncio.run(run_pipeline(model=model_name or None))
 
-        t = threading.Thread(target=_run_in_thread, daemon=True)
+        t = threading.Thread(target=_run_in_thread, args=(model,), daemon=True)
         t.start()
 
         # Poll every 3 seconds until pipeline finishes or force-stopped
@@ -159,6 +184,7 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
+        self.fetch_models()
         store = _get_store()
         # Silent cleanup of old rejected/skipped items on page load
         store.cleanup_old_items()

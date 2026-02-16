@@ -203,6 +203,38 @@ def rule_proposals_section() -> rx.Component:
     )
 
 
+def model_selector() -> rx.Component:
+    """Dropdown to select which LLM model to use for scoring."""
+    return rx.hstack(
+        rx.select.root(
+            rx.select.trigger(placeholder="Auto-detect"),
+            rx.select.content(
+                rx.select.item("Auto-detect", value=""),
+                rx.foreach(
+                    DigestState.available_models,
+                    lambda m: rx.select.item(m, value=m),
+                ),
+            ),
+            value=DigestState.selected_model,
+            on_change=DigestState.set_selected_model,
+            size="2",
+        ),
+        rx.button(
+            rx.cond(
+                DigestState.models_loading,
+                rx.spinner(size="1"),
+                rx.text("R", size="1"),
+            ),
+            size="1",
+            variant="ghost",
+            on_click=DigestState.fetch_models,
+            title="Refresh models",
+        ),
+        align="center",
+        spacing="1",
+    )
+
+
 def run_selector() -> rx.Component:
     """Dropdown to select which processing run to review."""
     return rx.select.root(
@@ -408,6 +440,7 @@ def index() -> rx.Component:
                         ),
                         rx.fragment(),
                     ),
+                    model_selector(),
                     rx.cond(
                         DigestState.pipeline_running,
                         rx.hstack(
@@ -575,12 +608,12 @@ def _is_locked() -> bool:
     return True
 
 
-def _start_pipeline_thread():
+def _start_pipeline_thread(model: str | None = None):
     """Start the pipeline in a background thread."""
     def _run():
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
         from scripts.run_weekly import run_pipeline
-        asyncio.run(run_pipeline())
+        asyncio.run(run_pipeline(model=model))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -590,7 +623,8 @@ async def _api_pipeline_trigger(request):
     """Trigger the pipeline via HTTP."""
     if _is_locked():
         return JSONResponse({"status": "already_running"})
-    _start_pipeline_thread()
+    model = request.query_params.get("model") or None
+    _start_pipeline_thread(model=model)
     return JSONResponse({"status": "started"})
 
 

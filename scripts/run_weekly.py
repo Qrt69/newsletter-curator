@@ -109,7 +109,7 @@ def _release_lock(token: str | None = None):
         pass
 
 
-async def run_pipeline():
+async def run_pipeline(model: str | None = None):
     """Run the full ingest pipeline once."""
     token = _acquire_lock()
     if token is None:
@@ -117,13 +117,13 @@ async def run_pipeline():
         return
 
     try:
-        await _run_pipeline_inner()
+        await _run_pipeline_inner(model=model)
     finally:
         _clear_progress()
         _release_lock(token)
 
 
-async def _run_pipeline_inner():
+async def _run_pipeline_inner(model: str | None = None):
     """Inner pipeline logic (called with lock held)."""
     print("=" * 60)
     print("Newsletter Curator - Pipeline Run")
@@ -217,7 +217,9 @@ async def _run_pipeline_inner():
         print("  No feedback overrides to inject")
 
     max_text = int(os.environ.get("SCORER_MAX_TEXT_CHARS", "2000"))
-    scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text)
+    scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
+    if model:
+        print(f"  Using model: {model}")
 
     def _scoring_progress(i: int, total: int):
         _write_progress(f"Scoring ({i}/{total} items)")
