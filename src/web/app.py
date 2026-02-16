@@ -209,7 +209,7 @@ def model_selector() -> rx.Component:
         rx.select.root(
             rx.select.trigger(placeholder="Auto-detect"),
             rx.select.content(
-                rx.select.item("Auto-detect", value=""),
+                rx.select.item("Auto-detect", value="auto"),
                 rx.foreach(
                     DigestState.available_models,
                     lambda m: rx.select.item(m, value=m),
@@ -623,7 +623,8 @@ async def _api_pipeline_trigger(request):
     """Trigger the pipeline via HTTP."""
     if _is_locked():
         return JSONResponse({"status": "already_running"})
-    model = request.query_params.get("model") or None
+    raw = request.query_params.get("model", "")
+    model = None if raw in ("", "auto") else raw
     _start_pipeline_thread(model=model)
     return JSONResponse({"status": "started"})
 

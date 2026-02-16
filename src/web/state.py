@@ -56,7 +56,7 @@ class DigestState(rx.State):
     rule_proposals: list[dict] = []
 
     # Model selector
-    selected_model: str = ""
+    selected_model: str = "auto"
     available_models: list[str] = []
     models_loading: bool = False
 
@@ -152,7 +152,8 @@ class DigestState(rx.State):
             from pathlib import Path
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
             from scripts.run_weekly import run_pipeline
-            asyncio.run(run_pipeline(model=model_name or None))
+            m = None if model_name == "auto" else model_name or None
+            asyncio.run(run_pipeline(model=m))
 
         t = threading.Thread(target=_run_in_thread, args=(model,), daemon=True)
         t.start()
