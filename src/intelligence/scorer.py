@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 import openai
+from json_repair import repair_json
 
 from .prompts import SCORER_SYSTEM_PROMPT, format_user_prompt
 
@@ -175,6 +176,7 @@ class Scorer:
         if self._feedback_examples:
             system_prompt = system_prompt + "\n" + self._feedback_examples
 
+        text_chars = self._max_text_chars
         last_error = None
         for attempt in range(self._max_retries + 1):
             try:
@@ -203,8 +205,21 @@ class Scorer:
                 last_error = str(exc)
                 if attempt < self._max_retries:
                     print(f"  [Scorer] Retry {attempt+1}/{self._max_retries} - parse error: {exc}")
-                    print(f"  [Scorer] Raw response (first 500 chars): {raw_text[:500]}")
+                    print(f"  [Scorer] Raw (first 300 chars): {raw_text[:300]}")
                     continue
+            except (openai.BadRequestError, anthropic.BadRequestError) as exc:
+                err_str = str(exc)
+                # Context overflow: prompt too long for model — retry with less text
+                if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
+                    text_chars = text_chars // 2
+                    if text_chars < 100:
+                        last_error = err_str
+                        break
+                    print(f"  [Scorer] Context overflow, retrying with {text_chars} chars")
+                    user_prompt = format_user_prompt(item, text_chars)
+                    continue
+                last_error = err_str
+                break
             except (anthropic.APIError, openai.APIError, openai.APIConnectionError) as exc:
                 last_error = str(exc)
                 break
@@ -270,144 +285,26 @@ class Scorer:
     # ── Internal methods ───────────────────────────────────────
 
     @staticmethod
-    def _extract_json(raw_text: str) -> str:
+    def _parse_response(raw_text: str) -> dict:
         """
-        Extract a JSON object from LLM output, handling common issues:
-        - Markdown code fences
-        - Extra text before/after the JSON
-        - Trailing commas
-        - Missing commas between key-value pairs
-        - Single quotes instead of double quotes
-        - Truncated JSON (unclosed braces)
-        - Unescaped newlines in string values
+        Parse LLM response text into a structured dict.
+
+        Uses json_repair to handle all common LLM JSON issues (missing commas,
+        trailing commas, truncated output, unquoted keys, code fences, etc.).
         """
         text = raw_text.strip()
 
         # Strip markdown code fences
         text = re.sub(r"^```(?:json)?\s*\n?", "", text)
         text = re.sub(r"\n?```\s*$", "", text)
-        text = text.strip()
 
-        # Try direct parse first (fast path)
-        try:
-            json.loads(text)
-            return text
-        except json.JSONDecodeError:
-            pass
+        # json_repair handles everything else: missing/trailing commas,
+        # unquoted keys, truncated output, single quotes, etc.
+        data = repair_json(text, return_objects=True)
 
-        # Extract JSON object by finding matching braces
-        start = text.find("{")
-        if start != -1:
-            depth = 0
-            in_string = False
-            escape = False
-            end = len(text) - 1
-            for i in range(start, len(text)):
-                c = text[i]
-                if escape:
-                    escape = False
-                    continue
-                if c == "\\":
-                    escape = True
-                    continue
-                if c == '"' and not escape:
-                    in_string = not in_string
-                    continue
-                if in_string:
-                    continue
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i
-                        break
-            text = text[start:end + 1]
-
-            # If braces are unbalanced (truncated output), salvage what we can
-            if depth > 0:
-                # Find the last complete key-value pair by looking for the last
-                # comma that's outside a string, and truncate there
-                last_comma = -1
-                scan_in_string = False
-                scan_escape = False
-                for j in range(len(text)):
-                    ch = text[j]
-                    if scan_escape:
-                        scan_escape = False
-                        continue
-                    if ch == "\\":
-                        scan_escape = True
-                        continue
-                    if ch == '"':
-                        scan_in_string = not scan_in_string
-                        continue
-                    if not scan_in_string and ch == ",":
-                        last_comma = j
-                if last_comma > 0:
-                    text = text[:last_comma]
-                text = text.rstrip().rstrip(",")
-                # Close any unclosed brackets/braces
-                open_brackets = 0
-                open_braces = 0
-                s_in_str = False
-                s_esc = False
-                for ch in text:
-                    if s_esc:
-                        s_esc = False
-                        continue
-                    if ch == "\\":
-                        s_esc = True
-                        continue
-                    if ch == '"':
-                        s_in_str = not s_in_str
-                        continue
-                    if s_in_str:
-                        continue
-                    if ch == "{":
-                        open_braces += 1
-                    elif ch == "}":
-                        open_braces -= 1
-                    elif ch == "[":
-                        open_brackets += 1
-                    elif ch == "]":
-                        open_brackets -= 1
-                text += "]" * max(0, open_brackets)
-                text += "}" * max(0, open_braces)
-
-        # Fix trailing commas before } or ]
-        text = re.sub(r",\s*([}\]])", r"\1", text)
-
-        # Fix missing commas between key-value pairs.
-        # Matches: a value (string, number, bool, null, ] or }) at end of a pair,
-        # followed by whitespace/newline then a new key (quoted string + colon).
-        text = re.sub(
-            r'(true|false|null|-?\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*"|\]|\})'
-            r'(\s*\n\s*)'
-            r'("(?:[^"\\]|\\.)*"\s*:)',
-            r"\1,\2\3",
-            text,
-        )
-
-        # Fix unescaped newlines inside string values
-        # (replace literal newlines between quotes with \n)
-        def _fix_newlines_in_strings(m: re.Match) -> str:
-            return m.group(0).replace("\n", "\\n")
-        text = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', _fix_newlines_in_strings, text)
-
-        return text
-
-    @staticmethod
-    def _parse_response(raw_text: str) -> dict:
-        """
-        Parse LLM response text into a structured dict.
-
-        Handles code fences, extra text, trailing commas, validates verdict,
-        and fills defaults.
-        """
-        text = Scorer._extract_json(raw_text)
-
-        data = json.loads(text)
+        # repair_json may return a list or string if the input was very broken
+        if not isinstance(data, dict):
+            raise json.JSONDecodeError("repair_json did not produce a dict", text, 0)
 
         # Ensure score is int
         score = int(data.get("score", 0))

@@ -122,6 +122,20 @@ def test_parse_response():
     assert result["tags"] == ["a", "b"]
     print("  Mixed issues (missing + trailing commas): OK")
 
+    # Single quotes instead of double quotes
+    single_quotes = "{'score': 4, 'item_type': 'article', 'reasoning': 'good stuff'}"
+    result = Scorer._parse_response(single_quotes)
+    assert result["score"] == 4
+    assert result["verdict"] == "likely_fit"
+    print("  Single quotes: OK")
+
+    # Unquoted keys
+    unquoted = '{score: 5, item_type: "python_library", reasoning: "test"}'
+    result = Scorer._parse_response(unquoted)
+    assert result["score"] == 5
+    assert result["item_type"] == "python_library"
+    print("  Unquoted keys: OK")
+
     print("PASS\n")
 
 
