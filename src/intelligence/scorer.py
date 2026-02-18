@@ -202,6 +202,8 @@ class Scorer:
             except (json.JSONDecodeError, KeyError, IndexError) as exc:
                 last_error = str(exc)
                 if attempt < self._max_retries:
+                    print(f"  [Scorer] Retry {attempt+1}/{self._max_retries} - parse error: {exc}")
+                    print(f"  [Scorer] Raw response (first 500 chars): {raw_text[:500]}")
                     continue
             except (anthropic.APIError, openai.APIError, openai.APIConnectionError) as exc:
                 last_error = str(exc)
@@ -274,7 +276,10 @@ class Scorer:
         - Markdown code fences
         - Extra text before/after the JSON
         - Trailing commas
-        - Single quotes instead of double quotes (when unambiguous)
+        - Missing commas between key-value pairs
+        - Single quotes instead of double quotes
+        - Truncated JSON (unclosed braces)
+        - Unescaped newlines in string values
         """
         text = raw_text.strip()
 
@@ -296,6 +301,7 @@ class Scorer:
             depth = 0
             in_string = False
             escape = False
+            end = len(text) - 1
             for i in range(start, len(text)):
                 c = text[i]
                 if escape:
@@ -314,11 +320,74 @@ class Scorer:
                 elif c == "}":
                     depth -= 1
                     if depth == 0:
-                        text = text[start:i + 1]
+                        end = i
                         break
+            text = text[start:end + 1]
 
-        # Fix trailing commas before } or ] (most common local LLM issue)
+            # If braces are unbalanced (truncated output), salvage what we can
+            if depth > 0:
+                # Find the last complete key-value pair by looking for the last
+                # comma that's outside a string, and truncate there
+                last_comma = -1
+                scan_in_string = False
+                scan_escape = False
+                for j in range(len(text)):
+                    ch = text[j]
+                    if scan_escape:
+                        scan_escape = False
+                        continue
+                    if ch == "\\":
+                        scan_escape = True
+                        continue
+                    if ch == '"':
+                        scan_in_string = not scan_in_string
+                        continue
+                    if not scan_in_string and ch == ",":
+                        last_comma = j
+                if last_comma > 0:
+                    text = text[:last_comma]
+                text = text.rstrip().rstrip(",")
+                # Close any unclosed brackets/braces
+                open_brackets = 0
+                open_braces = 0
+                s_in_str = False
+                s_esc = False
+                for ch in text:
+                    if s_esc:
+                        s_esc = False
+                        continue
+                    if ch == "\\":
+                        s_esc = True
+                        continue
+                    if ch == '"':
+                        s_in_str = not s_in_str
+                        continue
+                    if s_in_str:
+                        continue
+                    if ch == "{":
+                        open_braces += 1
+                    elif ch == "}":
+                        open_braces -= 1
+                    elif ch == "[":
+                        open_brackets += 1
+                    elif ch == "]":
+                        open_brackets -= 1
+                text += "]" * max(0, open_brackets)
+                text += "}" * max(0, open_braces)
+
+        # Fix trailing commas before } or ]
         text = re.sub(r",\s*([}\]])", r"\1", text)
+
+        # Fix missing commas between key-value pairs.
+        # Matches: a value (string, number, bool, null, ] or }) at end of a pair,
+        # followed by whitespace/newline then a new key (quoted string + colon).
+        text = re.sub(
+            r'(true|false|null|-?\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*"|\]|\})'
+            r'(\s*\n\s*)'
+            r'("(?:[^"\\]|\\.)*"\s*:)',
+            r"\1,\2\3",
+            text,
+        )
 
         # Fix unescaped newlines inside string values
         # (replace literal newlines between quotes with \n)

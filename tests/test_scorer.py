@@ -99,6 +99,29 @@ def test_parse_response():
     assert result["verdict"] == "maybe"
     print("  Code fences with prefix text: OK")
 
+    # Missing commas between key-value pairs (common local LLM issue)
+    missing_commas = '{\n  "score": 5\n  "verdict": "strong_fit"\n  "item_type": "python_library"\n  "reasoning": "Great lib"\n  "signals": ["+3 Python"]\n  "suggested_name": "TestLib"\n  "tags": ["python"]\n}'
+    result = Scorer._parse_response(missing_commas)
+    assert result["score"] == 5
+    assert result["verdict"] == "strong_fit"
+    assert result["item_type"] == "python_library"
+    assert result["suggested_name"] == "TestLib"
+    print("  Missing commas between pairs: OK")
+
+    # Truncated JSON (LLM ran out of tokens)
+    truncated = '{"score": 6, "verdict": "strong_fit", "item_type": "ai_tool", "reasoning": "This is a great tool for'
+    result = Scorer._parse_response(truncated)
+    assert result["score"] == 6
+    assert result["verdict"] == "strong_fit"
+    print("  Truncated JSON: OK")
+
+    # Mixed: missing commas + trailing comma
+    mixed_issues = '{\n  "score": 3\n  "verdict": "likely_fit"\n  "item_type": "article"\n  "tags": ["a", "b",]\n}'
+    result = Scorer._parse_response(mixed_issues)
+    assert result["score"] == 3
+    assert result["tags"] == ["a", "b"]
+    print("  Mixed issues (missing + trailing commas): OK")
+
     print("PASS\n")
 
 
