@@ -78,6 +78,27 @@ def test_parse_response():
     assert result["suggested_name"] == ""
     print("  Missing fields -> defaults: OK")
 
+    # Trailing commas (common local LLM issue)
+    trailing = '{"score": 5, "verdict": "strong_fit", "item_type": "ai_tool", "tags": ["a", "b",],}'
+    result = Scorer._parse_response(trailing)
+    assert result["score"] == 5
+    assert result["tags"] == ["a", "b"]
+    print("  Trailing commas: OK")
+
+    # Extra text around JSON
+    wrapped = 'Here is my analysis:\n\n{"score": 3, "verdict": "likely_fit", "item_type": "article", "reasoning": "good"}\n\nI hope this helps!'
+    result = Scorer._parse_response(wrapped)
+    assert result["score"] == 3
+    assert result["verdict"] == "likely_fit"
+    print("  Extra text around JSON: OK")
+
+    # Code fences with extra text before
+    prefixed = 'Sure, here is the JSON:\n```json\n{"score": 2, "item_type": "concept_pattern"}\n```'
+    result = Scorer._parse_response(prefixed)
+    assert result["score"] == 2
+    assert result["verdict"] == "maybe"
+    print("  Code fences with prefix text: OK")
+
     print("PASS\n")
 
 

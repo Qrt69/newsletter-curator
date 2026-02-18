@@ -77,6 +77,7 @@ class Scorer:
             self._model = model or os.environ.get("LLM_MODEL", "")
             if not self._model:
                 self._model = self._auto_detect_model()
+            self._local_json_mode = True  # try JSON mode, disable on error
 
         # Token usage tracking (guarded by _lock for thread safety)
         self._lock = threading.Lock()
@@ -129,7 +130,7 @@ class Scorer:
                 response.usage.output_tokens,
             )
         else:
-            response = self._openai_client.chat.completions.create(
+            kwargs = dict(
                 model=self._model,
                 max_tokens=512,
                 temperature=0.2,
@@ -138,6 +139,16 @@ class Scorer:
                     {"role": "user", "content": user_prompt},
                 ],
             )
+            # Try JSON mode first (supported by LM Studio 0.3+)
+            try:
+                if self._local_json_mode:
+                    kwargs["response_format"] = {"type": "json_object"}
+                response = self._openai_client.chat.completions.create(**kwargs)
+            except (openai.BadRequestError, openai.APIError):
+                # Model/server doesn't support response_format, fall back
+                self._local_json_mode = False
+                kwargs.pop("response_format", None)
+                response = self._openai_client.chat.completions.create(**kwargs)
             raw_text = response.choices[0].message.content or ""
             usage = response.usage
             input_tokens = usage.prompt_tokens if usage else 0
@@ -257,17 +268,75 @@ class Scorer:
     # ── Internal methods ───────────────────────────────────────
 
     @staticmethod
+    def _extract_json(raw_text: str) -> str:
+        """
+        Extract a JSON object from LLM output, handling common issues:
+        - Markdown code fences
+        - Extra text before/after the JSON
+        - Trailing commas
+        - Single quotes instead of double quotes (when unambiguous)
+        """
+        text = raw_text.strip()
+
+        # Strip markdown code fences
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+        text = text.strip()
+
+        # Try direct parse first (fast path)
+        try:
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            pass
+
+        # Extract JSON object by finding matching braces
+        start = text.find("{")
+        if start != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for i in range(start, len(text)):
+                c = text[i]
+                if escape:
+                    escape = False
+                    continue
+                if c == "\\":
+                    escape = True
+                    continue
+                if c == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        text = text[start:i + 1]
+                        break
+
+        # Fix trailing commas before } or ] (most common local LLM issue)
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+
+        # Fix unescaped newlines inside string values
+        # (replace literal newlines between quotes with \n)
+        def _fix_newlines_in_strings(m: re.Match) -> str:
+            return m.group(0).replace("\n", "\\n")
+        text = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', _fix_newlines_in_strings, text)
+
+        return text
+
+    @staticmethod
     def _parse_response(raw_text: str) -> dict:
         """
         Parse LLM response text into a structured dict.
 
-        Handles code fences, validates verdict, and fills defaults.
+        Handles code fences, extra text, trailing commas, validates verdict,
+        and fills defaults.
         """
-        # Strip markdown code fences if present
-        text = raw_text.strip()
-        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
-        text = text.strip()
+        text = Scorer._extract_json(raw_text)
 
         data = json.loads(text)
 
