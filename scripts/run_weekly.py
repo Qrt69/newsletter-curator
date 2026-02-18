@@ -238,7 +238,8 @@ async def _run_pipeline_inner(model: str | None = None):
 
     # 3b. Explode listicles
     from src.intelligence.exploder import ListicleExploder
-    exploder = ListicleExploder()
+    nc = NotionClient()
+    exploder = ListicleExploder(notion_client=nc)
     pre_count = len(scored)
     scored = exploder.process_batch(scored)
     if len(scored) != pre_count:
@@ -250,7 +251,6 @@ async def _run_pipeline_inner(model: str | None = None):
     # 4. Route items
     _write_progress("Building dedup index from Notion...")
     print("\n[4/5] Routing items...")
-    nc = NotionClient()
     dedup = DedupIndex(nc)
     dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
     _write_progress("Routing items...")
