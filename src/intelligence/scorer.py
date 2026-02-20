@@ -211,11 +211,11 @@ class Scorer:
                 err_str = str(exc)
                 # Context overflow: prompt too long for model — retry with less text
                 if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
+                    last_error = f"context_overflow: {err_str[:200]}"
                     text_chars = text_chars // 2
                     if text_chars < 100:
-                        last_error = err_str
                         break
-                    print(f"  [Scorer] Context overflow, retrying with {text_chars} chars")
+                    print(f"  [Scorer] Context overflow (n_ctx too small?), retrying with {text_chars} chars: {err_str[:150]}")
                     user_prompt = format_user_prompt(item, text_chars)
                     continue
                 last_error = err_str
