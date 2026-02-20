@@ -267,6 +267,15 @@ async def _run_pipeline_inner(model: str | None = None):
             if field not in decision and original.get(field):
                 decision[field] = original[field]
 
+    # Build set of email IDs with at least one successfully scored item
+    # (must do this before step 5 pops _email_meta from decisions)
+    ok_email_ids = set()
+    for decision in decisions:
+        if decision.get("verdict") != "error":
+            eid = (decision.get("_email_meta") or {}).get("email_id")
+            if eid:
+                ok_email_ids.add(eid)
+
     # 5. Store in digest DB
     _write_progress("Storing results...")
     print("\n[5/5] Storing in digest DB...")
@@ -296,11 +305,18 @@ async def _run_pipeline_inner(model: str | None = None):
 
     print("  -> Open the web app to review proposed items.")
 
-    # 6. Move processed emails
+    # 6. Move processed emails (only those with at least one successful score)
+    failed_emails = [e for e in emails if e["id"] not in ok_email_ids]
+    if failed_emails:
+        print(f"\n  Skipping {len(failed_emails)} email(s) where ALL items failed scoring"
+              " -- they stay in 'To qualify' for the next run.")
+
     _write_progress("Moving emails...")
     print("\n[+] Moving emails to 'Processed'...")
     moved = 0
     for email in emails:
+        if email["id"] not in ok_email_ids:
+            continue
         try:
             await fetcher.move_to_processed(email["id"])
             moved += 1

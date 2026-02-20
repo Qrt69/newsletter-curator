@@ -51,7 +51,7 @@ _DEFAULT_UA = (
 
 # Boilerplate link text patterns (case-insensitive)
 _BOILERPLATE_TEXT = re.compile(
-    r"^(read more|continue reading|read the full"
+    r"^(read more|continue reading|read the full|read online"
     r"|follow|subscribe|sign up|sign in|log in"
     r"|view in browser|open in app|view online"
     r"|learn more|click here|download app|get the app"
@@ -93,6 +93,20 @@ def _is_boilerplate_text(text: str) -> bool:
     # Cross-promo newsletter links ("Programmer Weekly", "Founder Weekly", etc.)
     if _NEWSLETTER_PROMO_TEXT.match(stripped):
         return True
+    # CTA prefixes ("Join ...", "Sign up ...", "Check out ...", etc.)
+    if _CTA_PREFIX.match(stripped):
+        return True
+    # Single lowercase word — inline prose links ("disclosed", "reported", "slime")
+    # Product/tool names are typically capitalized or contain digits/dots/hyphens
+    if _SINGLE_GENERIC_WORD.match(stripped):
+        return True
+    # Emoji-heavy text — strip emoji, check what remains
+    alpha_text = _EMOJI_RE.sub("", stripped).strip()
+    if len(stripped) > len(alpha_text):
+        # Has emoji — filter if remaining text is short (≤2 words)
+        word_count = len(alpha_text.split())
+        if word_count <= 2:
+            return True
     return False
 
 
@@ -108,6 +122,26 @@ _NEWSLETTER_PROMO_TEXT = re.compile(
     re.IGNORECASE,
 )
 
+
+# CTA (call-to-action) prefixes — "Join the X", "Sign up for Y", etc.
+_CTA_PREFIX = re.compile(
+    r"^(join|check out|sign up|get (in touch|started|the)|subscribe"
+    r"|download (the|our)|view (the|our)|secure your|see (all|more|our)"
+    r"|try|upgrade|redefine|become a|start your|claim your"
+    r"|reserve your|grab your|unlock)\b",
+    re.IGNORECASE,
+)
+
+# Single generic word — all lowercase a-z, no digits/dots/hyphens/caps.
+# Catches inline prose links like "disclosed", "reported", "available".
+# Allows product names like "NotebookLM", "Z.ai", "GLM-5".
+_SINGLE_GENERIC_WORD = re.compile(r"^[a-z]{3,}$")
+
+# Emoji pattern — broad match for common emoji ranges
+_EMOJI_RE = re.compile(
+    r"[\U0001f300-\U0001f9ff\U00002702-\U000027b0\U0000fe00-\U0000fe0f"
+    r"\U0000200d\U00002600-\U000026ff\U0001fa00-\U0001fa6f\U0001fa70-\U0001faff]+",
+)
 
 # Patterns that indicate a site error page rather than real content
 _ERROR_PAGE_PATTERNS = re.compile(
