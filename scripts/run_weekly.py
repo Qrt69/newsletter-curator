@@ -209,10 +209,12 @@ async def _run_pipeline_inner(model: str | None = None):
     _write_progress("Scoring items...")
     print("\n[3/5] Scoring items...")
     feedback_proc = FeedbackProcessor(store)
-    feedback_examples = feedback_proc.format_examples()
+    # Cap feedback examples for local backend (limited context window)
+    max_fb = 3 if os.environ.get("SCORER_BACKEND", "local") == "local" else 10
+    feedback_examples = feedback_proc.format_examples(max_examples=max_fb)
     override_count = len(feedback_proc.get_overrides())
     if feedback_examples:
-        print(f"  Injecting {override_count} feedback overrides into scorer prompt")
+        print(f"  Injecting {min(override_count, max_fb)} feedback examples into scorer prompt (of {override_count} overrides)")
     else:
         print("  No feedback overrides to inject")
 
