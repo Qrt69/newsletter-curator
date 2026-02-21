@@ -86,6 +86,7 @@ class Scorer:
         self._total_output_tokens = 0
         self._items_scored = 0
         self._errors = 0
+        self._consecutive_errors = 0  # for fail-fast in batch scoring
 
     def _auto_detect_model(self) -> str:
         """Query the local server for available models and pick the first one."""
@@ -105,6 +106,67 @@ class Scorer:
             f"LM Studio at {self._openai_client.base_url} has no models loaded. "
             "Load a model in LM Studio first."
         )
+
+    def preflight_check(self):
+        """
+        Test the LLM with the actual system prompt to verify it fits in context.
+        Raises ConnectionError with a clear message if anything goes wrong.
+        """
+        print(f"  [Scorer] Preflight check ({self._backend}: {self._model})...")
+
+        # Build the full system prompt (same as score_item would)
+        system_prompt = SCORER_SYSTEM_PROMPT
+        if self._feedback_examples:
+            system_prompt = system_prompt + "\n" + self._feedback_examples
+
+        # Use a minimal user prompt to test if the system prompt fits
+        test_user = (
+            "Evaluate this newsletter item:\n\n"
+            "URL: https://example.com/test\n"
+            "Link text: Test Article\n"
+            "Title: Test\nAuthor: \nSite: \nHostname: example.com\n"
+            "Description: \n\nArticle text (first 0 chars):\n"
+            "[No article text extracted -- score based on URL, title, and link_text only]"
+        )
+
+        try:
+            raw, _, _ = self._call_llm(system_prompt, test_user)
+            if not raw or not raw.strip():
+                raise ConnectionError(
+                    f"LLM returned empty response. Model '{self._model}' may not be loaded."
+                )
+            print(f"  [Scorer] Preflight OK - full prompt fits in context")
+        except (openai.BadRequestError, anthropic.BadRequestError) as exc:
+            err_str = str(exc)
+            if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
+                # System prompt too big -- try without feedback examples
+                if self._feedback_examples:
+                    print(f"  [Scorer] Full prompt overflows context, trying without feedback examples...")
+                    try:
+                        raw, _, _ = self._call_llm(SCORER_SYSTEM_PROMPT, test_user)
+                        if raw and raw.strip():
+                            print(f"  [Scorer] OK without feedback -- dropping feedback examples for this run")
+                            self._feedback_examples = ""
+                            return
+                    except (openai.BadRequestError, anthropic.BadRequestError):
+                        pass
+                raise ConnectionError(
+                    f"System prompt alone exceeds model context window. "
+                    f"Increase context size in LM Studio (try 8192+) or use a smaller prompt. "
+                    f"Error: {err_str[:200]}"
+                ) from exc
+            raise ConnectionError(
+                f"LLM rejected request: {err_str[:200]}"
+            ) from exc
+        except (openai.APIConnectionError, openai.APIError) as exc:
+            raise ConnectionError(
+                f"Cannot reach LLM at {self._openai_client.base_url}. "
+                f"Is LM Studio running with a model loaded? Error: {exc}"
+            ) from exc
+        except (anthropic.APIError, anthropic.APIConnectionError) as exc:
+            raise ConnectionError(
+                f"Cannot reach Anthropic API. Error: {exc}"
+            ) from exc
 
     # ── LLM call abstraction ───────────────────────────────────
 
@@ -177,8 +239,12 @@ class Scorer:
             system_prompt = system_prompt + "\n" + self._feedback_examples
 
         text_chars = self._max_text_chars
+        feedback_stripped = False
         last_error = None
-        for attempt in range(self._max_retries + 1):
+
+        # Allow enough retries for: text shrink stages + feedback strip + parse retries
+        max_attempts = self._max_retries + 4  # extra room for context overflow retries
+        for attempt in range(max_attempts):
             try:
                 raw_text, in_tok, out_tok = self._call_llm(system_prompt, user_prompt)
 
@@ -199,25 +265,39 @@ class Scorer:
                     self._total_input_tokens += in_tok
                     self._total_output_tokens += out_tok
                     self._items_scored += 1
+                    self._consecutive_errors = 0
                 return result
 
             except (json.JSONDecodeError, KeyError, IndexError) as exc:
                 last_error = str(exc)
-                if attempt < self._max_retries:
-                    print(f"  [Scorer] Retry {attempt+1}/{self._max_retries} - parse error: {exc}")
+                if attempt < max_attempts - 1:
+                    print(f"  [Scorer] Retry - parse error: {exc}")
                     print(f"  [Scorer] Raw (first 300 chars): {raw_text[:300]}")
                     continue
             except (openai.BadRequestError, anthropic.BadRequestError) as exc:
                 err_str = str(exc)
-                # Context overflow: prompt too long for model — retry with less text
+                # Context overflow: prompt too long for model
                 if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
                     last_error = f"context_overflow: {err_str[:200]}"
-                    text_chars = text_chars // 2
-                    if text_chars < 100:
-                        break
-                    print(f"  [Scorer] Context overflow (n_ctx too small?), retrying with {text_chars} chars: {err_str[:150]}")
-                    user_prompt = format_user_prompt(item, text_chars)
-                    continue
+
+                    # Strategy: shrink text -> strip text -> strip feedback -> give up
+                    if text_chars > 0:
+                        text_chars = text_chars // 2
+                        if text_chars < 100:
+                            text_chars = 0
+                        print(f"  [Scorer] Context overflow, retrying with {text_chars} chars")
+                        user_prompt = format_user_prompt(item, text_chars)
+                        continue
+
+                    if not feedback_stripped and self._feedback_examples:
+                        feedback_stripped = True
+                        system_prompt = SCORER_SYSTEM_PROMPT  # drop feedback
+                        user_prompt = format_user_prompt(item, 0)
+                        print(f"  [Scorer] Context overflow, retrying without feedback examples")
+                        continue
+
+                    # Nothing left to strip
+                    break
                 last_error = err_str
                 break
             except (anthropic.APIError, openai.APIError, openai.APIConnectionError) as exc:
@@ -226,7 +306,11 @@ class Scorer:
 
         with self._lock:
             self._errors += 1
+            self._consecutive_errors += 1
+        print(f"  [Scorer] FAILED: {last_error}")
         return self._error_result(item, f"scoring failed after retries: {last_error}")
+
+    _FAIL_FAST_THRESHOLD = 5  # abort batch after this many consecutive errors
 
     def score_batch(
         self,
@@ -246,13 +330,22 @@ class Scorer:
         Returns:
             List of scored dicts (same order as input).
         """
+        # Preflight: verify LLM is reachable before scoring the whole batch
+        self.preflight_check()
+
         if max_workers is None:
             max_workers = 1 if self._backend == "local" else 4
 
         total = len(items)
+        self._consecutive_errors = 0
 
         def _score_one(args: tuple[int, dict]) -> dict:
             i, item = args
+
+            # Fail fast: if too many consecutive errors, skip remaining items
+            if self._consecutive_errors >= self._FAIL_FAST_THRESHOLD:
+                return self._error_result(item, "skipped: too many consecutive failures")
+
             link_text = item.get("link_text", "?")[:40]
             link_text = link_text.encode("ascii", errors="replace").decode("ascii")
             print(f"  [{i}/{total}] Scoring: {link_text}")
@@ -261,6 +354,12 @@ class Scorer:
             verdict = result.get("verdict", "?")
             score = result.get("score", "?")
             print(f"  [{i}/{total}] -> {verdict} (score: {score})")
+
+            # Check fail-fast after scoring
+            if self._consecutive_errors >= self._FAIL_FAST_THRESHOLD:
+                print(f"\n  [Scorer] ABORTING BATCH: {self._FAIL_FAST_THRESHOLD} consecutive"
+                      " failures. Check LLM server and try again.")
+
             if on_progress is not None:
                 on_progress(i, total)
             return result

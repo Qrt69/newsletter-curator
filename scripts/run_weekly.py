@@ -224,7 +224,17 @@ async def _run_pipeline_inner(model: str | None = None):
     def _scoring_progress(i: int, total: int):
         _write_progress(f"Scoring ({i}/{total} items)")
 
-    scored = scorer.score_batch(all_items, on_progress=_scoring_progress)
+    try:
+        scored = scorer.score_batch(all_items, on_progress=_scoring_progress)
+    except ConnectionError as exc:
+        _write_progress(f"ERROR: {exc}")
+        print(f"\n  *** SCORING ABORTED: {exc}")
+        print("  Fix the LLM connection and re-run. Emails stay in 'To qualify'.")
+        store.finish_run(run_id, {
+            "items_extracted": len(all_items), "items_scored": 0,
+            "items_proposed": 0, "items_skipped": 0, "status": "error",
+        })
+        return
     print(f"  Scored {len(scored)} items")
     print(f"  Token usage: {scorer.stats()}")
 
