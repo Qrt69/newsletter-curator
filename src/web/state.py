@@ -166,6 +166,8 @@ class DigestState(rx.State):
                 progress = self._read_progress_file()
                 if progress:
                     self.pipeline_status = progress
+                # Reload runs + items so new results appear during pipeline
+                self._reload_runs()
             await asyncio.sleep(3)
 
         async with self:
