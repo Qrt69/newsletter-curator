@@ -8,7 +8,6 @@ services:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
-      - SCORER_MAX_TEXT_CHARS=0
       - SKIP_BROWSER_LOGIN=1
     volumes:
       - app-data:/data
@@ -22,7 +21,6 @@ services:
       - DATA_DIR=/data
       - SCORER_BACKEND=local
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
-      - SCORER_MAX_TEXT_CHARS=0
       - SKIP_BROWSER_LOGIN=1
     volumes:
       - app-data:/data
