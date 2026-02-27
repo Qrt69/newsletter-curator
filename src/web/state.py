@@ -166,12 +166,6 @@ class DigestState(rx.State):
                 progress = self._read_progress_file()
                 if progress:
                     self.pipeline_status = progress
-                # Reload runs + items so new results appear during pipeline
-                self._reload_runs()
-                # Auto-select newest run (the one being populated right now)
-                if self.runs and self.selected_run_id != self.runs[0]["id"]:
-                    self.selected_run_id = self.runs[0]["id"]
-                    self._load_items()
             await asyncio.sleep(3)
 
         async with self:

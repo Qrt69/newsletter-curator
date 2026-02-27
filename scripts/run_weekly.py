@@ -124,11 +124,7 @@ async def run_pipeline(model: str | None = None):
 
 
 async def _run_pipeline_inner(model: str | None = None):
-    """Inner pipeline logic (called with lock held).
-
-    Processes emails one at a time: extract -> score -> explode -> route -> store,
-    so items appear in the web UI progressively as each email completes.
-    """
+    """Inner pipeline logic (called with lock held)."""
     print("=" * 60)
     print("Newsletter Curator - Pipeline Run")
     print("=" * 60)
@@ -137,7 +133,7 @@ async def _run_pipeline_inner(model: str | None = None):
 
     # 1. Fetch emails
     _write_progress("Fetching emails...")
-    print("\n[1] Fetching emails...")
+    print("\n[1/5] Fetching emails...")
     fetcher = EmailFetcher()
     emails = await fetcher.fetch_emails()
     print(f"  Fetched {len(emails)} emails from 'To qualify'")
@@ -180,12 +176,40 @@ async def _run_pipeline_inner(model: str | None = None):
             print("\n[1b] No Medium/Beehiiv links found, skipping browser login")
             browser_fetcher = BrowserFetcher()
 
-    # 2. Setup: build shared resources once before per-email loop
-    _write_progress("Setting up scorer and dedup index...")
-    print("\n[2] Setting up...")
+    # 2. Extract content
+    _write_progress("Extracting content...")
+    print("\n[2/5] Extracting content...")
+    extractor = ContentExtractor(browser_fetcher=browser_fetcher)
+    all_items = []
+    for i, email in enumerate(emails, 1):
+        subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
+        _write_progress(f"Extracting content ({i}/{len(emails)} emails)")
+        print(f"  [{i}/{len(emails)}] {subject}")
+        items = extractor.extract_from_email(email["body_html"])
+        # Tag items with email metadata
+        for item in items:
+            item["_email_meta"] = {
+                "email_id": email["id"],
+                "email_subject": email["subject"],
+                "email_sender": email.get("sender_name") or email["sender"],
+            }
+        all_items.extend(items)
+    extractor.close()
+    print(f"  Extracted {len(all_items)} items total")
 
-    # Feedback / scorer
+    if not all_items:
+        store.finish_run(run_id, {
+            "items_extracted": 0, "items_scored": 0,
+            "items_proposed": 0, "items_skipped": 0, "status": "completed",
+        })
+        print("  No items extracted. Done.")
+        return
+
+    # 3. Score items (with feedback learning)
+    _write_progress("Scoring items...")
+    print("\n[3/5] Scoring items...")
     feedback_proc = FeedbackProcessor(store)
+    # Cap feedback examples for local backend (limited context window)
     max_fb = 3 if os.environ.get("SCORER_BACKEND", "local") == "local" else 10
     feedback_examples = feedback_proc.format_examples(max_examples=max_fb)
     override_count = len(feedback_proc.get_overrides())
@@ -199,127 +223,89 @@ async def _run_pipeline_inner(model: str | None = None):
     if model:
         print(f"  Using model: {model}")
 
-    # Dedup index (used by both Exploder and Router)
+    def _scoring_progress(i: int, total: int):
+        _write_progress(f"Scoring ({i}/{total} items)")
+
+    try:
+        scored = scorer.score_batch(all_items, on_progress=_scoring_progress)
+    except ConnectionError as exc:
+        _write_progress(f"ERROR: {exc}")
+        print(f"\n  *** SCORING ABORTED: {exc}")
+        print("  Fix the LLM connection and re-run. Emails stay in 'To qualify'.")
+        store.finish_run(run_id, {
+            "items_extracted": len(all_items), "items_scored": 0,
+            "items_proposed": 0, "items_skipped": 0, "status": "error",
+        })
+        return
+    print(f"  Scored {len(scored)} items")
+    print(f"  Token usage: {scorer.stats()}")
+
+    # Copy email metadata and extractor fields to scored items
+    # (Scorer only passes through url + link_text; we need title/author/text for DigestStore)
+    for original, result in zip(all_items, scored):
+        result["_email_meta"] = original.get("_email_meta", {})
+        for field in ("title", "author", "text"):
+            if field not in result and original.get(field):
+                result[field] = original[field]
+
+    # 3b. Build dedup index (used by both Exploder and Router)
     nc = NotionClient()
     _write_progress("Building dedup index from Notion...")
     dedup = DedupIndex(nc)
-    dedup.build()  # Always fresh from Notion -- never trust cache for pipeline runs
+    dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
 
-    # Exploder and Router (reused across emails, accumulate stats internally)
+    # 3c. Explode listicles
     from src.intelligence.exploder import ListicleExploder
     exploder = ListicleExploder(notion_client=nc, dedup_index=dedup)
-    router = Router(dedup)
-    extractor = ContentExtractor(browser_fetcher=browser_fetcher)
-
-    print("  Ready.")
-
-    # 3. Per-email processing loop
-    total_extracted = 0
-    total_scored = 0
-    all_decisions = []   # Accumulated for final summary
-    ok_email_ids = set()  # Emails with at least one non-error item
-    scoring_aborted = False
-
-    for i, email in enumerate(emails, 1):
-        subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
-        print(f"\n--- Email {i}/{len(emails)}: {subject} ---")
-        _write_progress(f"Email {i}/{len(emails)}: extracting...")
-
-        # 3a. Extract items from this email
-        items = extractor.extract_from_email(email["body_html"])
-        for item in items:
-            item["_email_meta"] = {
-                "email_id": email["id"],
-                "email_subject": email["subject"],
-                "email_sender": email.get("sender_name") or email["sender"],
-            }
-        total_extracted += len(items)
-        print(f"  Extracted {len(items)} items")
-
-        if not items:
-            continue
-
-        # 3b. Score this email's items
-        _write_progress(f"Email {i}/{len(emails)}: scoring ({len(items)} items)")
-
-        def _scoring_progress(j: int, total: int, _i=i):
-            _write_progress(f"Email {_i}/{len(emails)}: scoring ({j}/{total} items)")
-
-        try:
-            scored = scorer.score_batch(items, on_progress=_scoring_progress)
-        except ConnectionError as exc:
-            _write_progress(f"ERROR: {exc}")
-            print(f"\n  *** SCORING ABORTED: {exc}")
-            print("  Fix the LLM connection and re-run. Remaining emails stay in 'To qualify'.")
-            scoring_aborted = True
-            break
-
-        total_scored += len(scored)
-        print(f"  Scored {len(scored)} items")
-
-        # 3c. Copy email metadata and extractor fields to scored items
-        for original, result in zip(items, scored):
-            result["_email_meta"] = original.get("_email_meta", {})
-            for field in ("title", "author", "text"):
-                if field not in result and original.get(field):
-                    result[field] = original[field]
-
-        # 3d. Explode listicles
-        _write_progress(f"Email {i}/{len(emails)}: exploding listicles...")
-        pre_count = len(scored)
-        scored = exploder.process_batch(scored)
-        if len(scored) != pre_count:
-            print(f"  Exploded listicles: {pre_count} -> {len(scored)} items")
-
-        # 3e. Route items
-        _write_progress(f"Email {i}/{len(emails)}: routing...")
-        decisions = router.route_batch(scored)
-
-        # 3f. Copy metadata to decisions
-        for original, decision in zip(scored, decisions):
-            decision["_email_meta"] = original.get("_email_meta", {})
-            for field in ("title", "author", "text", "source_article"):
-                if field not in decision and original.get(field):
-                    decision[field] = original[field]
-
-        # Track email success
-        for decision in decisions:
-            if decision.get("verdict") != "error":
-                eid = (decision.get("_email_meta") or {}).get("email_id")
-                if eid:
-                    ok_email_ids.add(eid)
-
-        # 3g. Store items to DB immediately (visible in web UI right away)
-        _write_progress(f"Email {i}/{len(emails)}: storing...")
-        for decision in decisions:
-            email_meta = decision.pop("_email_meta", None)
-            store.add_item(run_id, decision, email_meta)
-
-        all_decisions.extend(decisions)
-        print(f"  Stored {len(decisions)} items to DB")
-
-    extractor.close()
-
-    # 4. Print summary and finish run
-    summary = Router.summary(all_decisions)
+    pre_count = len(scored)
+    scored = exploder.process_batch(scored)
+    if len(scored) != pre_count:
+        print(f"  Exploded listicles: {pre_count} -> {len(scored)} items")
     exploder_stats = exploder.stats()
-
-    print(f"\n{'=' * 60}")
-    print(f"  Token usage: {scorer.stats()}")
     if exploder_stats["items_exploded"] > 0:
         print(f"  Exploder stats: {exploder_stats}")
+
+    # 4. Route items
+    _write_progress("Routing items...")
+    print("\n[4/5] Routing items...")
+    router = Router(dedup)  # Reuse dedup index, no second build
+    decisions = router.route_batch(scored)
+    summary = Router.summary(decisions)
     print(f"  Routing summary: {summary['by_action']}")
 
-    run_status = "error" if scoring_aborted else "completed"
+    # Copy email metadata and extractor fields to decisions
+    # (Router doesn't pass through title/author/text either)
+    for original, decision in zip(scored, decisions):
+        decision["_email_meta"] = original.get("_email_meta", {})
+        for field in ("title", "author", "text", "source_article"):
+            if field not in decision and original.get(field):
+                decision[field] = original[field]
+
+    # Build set of email IDs with at least one successfully scored item
+    # (must do this before step 5 pops _email_meta from decisions)
+    ok_email_ids = set()
+    for decision in decisions:
+        if decision.get("verdict") != "error":
+            eid = (decision.get("_email_meta") or {}).get("email_id")
+            if eid:
+                ok_email_ids.add(eid)
+
+    # 5. Store in digest DB
+    _write_progress("Storing results...")
+    print("\n[5/5] Storing in digest DB...")
+    for decision in decisions:
+        email_meta = decision.pop("_email_meta", None)
+        store.add_item(run_id, decision, email_meta)
+
     store.finish_run(run_id, {
-        "items_extracted": total_extracted,
-        "items_scored": total_scored,
+        "items_extracted": len(all_items),
+        "items_scored": len(scored),
         "items_proposed": summary["by_action"].get("propose", 0),
         "items_skipped": summary["by_action"].get("skip", 0),
-        "status": run_status,
+        "status": "completed",
     })
 
-    print(f"\n  Run {run_id} {run_status}!")
+    print(f"\n  Run {run_id} complete!")
     print(f"  Proposed: {summary['by_action'].get('propose', 0)}")
     print(f"  Skipped:  {summary['by_action'].get('skip', 0)}")
     print(f"  Review:   {summary['by_action'].get('review', 0)}")
@@ -333,7 +319,7 @@ async def _run_pipeline_inner(model: str | None = None):
 
     print("  -> Open the web app to review proposed items.")
 
-    # 5. Move processed emails (only those with at least one successful score)
+    # 6. Move processed emails (only those with at least one successful score)
     failed_emails = [e for e in emails if e["id"] not in ok_email_ids]
     if failed_emails:
         print(f"\n  Skipping {len(failed_emails)} email(s) where ALL items failed scoring"
