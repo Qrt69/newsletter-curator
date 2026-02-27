@@ -34,7 +34,7 @@ INTEREST_PROFILE_BLOCK = """\
 | Practical and actionable (tutorial, how-to, code examples) | +1 |
 | From trusted source (official docs, known tech blog, reputable author) | +1 |
 | Similar to previously accepted items (matches known good patterns) | +2 |
-| No artifact, just a landing page or announcement | -2 |
+| No artifact, just a landing page or announcement (only when the content is genuinely a landing page, NOT when title extraction failed) | -2 |
 | Marketing heavy, substance light | -2 |
 | Appears to be a duplicate or very similar to common knowledge | -3 |
 
@@ -100,6 +100,12 @@ When you classify an item as python_library, also fill these additional fields:
 - "relevance": 1 sentence on why this matters for Kurt's projects
 - "usefulness": "High", "Medium", or "Low"
 - "usefulness_notes": brief note on practical use
+
+### Handling incomplete metadata
+- If title is missing but article text is available, derive the topic from the text — do NOT treat it as spam
+- The "Link text" field often contains the article's real title as written in the newsletter
+- Do NOT assume an item is spam or marketing just because the title is missing
+- Never use generic names like "Unnamed Article" — use the link text or derive a name from the content
 
 ## Response format
 

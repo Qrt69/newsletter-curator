@@ -262,6 +262,52 @@ def _is_non_article_url(url: str) -> bool:
     return False
 
 
+def _extract_title_fallback(html: str) -> str | None:
+    """Try to extract a title from HTML when trafilatura returns None.
+
+    Tries og:title meta tag, <title> tag, then first <h1>.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1. OpenGraph title
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content", "").strip():
+        return og["content"].strip()
+
+    # 2. <title> tag
+    if soup.title and soup.title.string and soup.title.string.strip():
+        return soup.title.string.strip()
+
+    # 3. First <h1>
+    h1 = soup.find("h1")
+    if h1:
+        text = h1.get_text(strip=True)
+        if text:
+            return text
+
+    return None
+
+
+def _extract_description_fallback(html: str) -> str | None:
+    """Try to extract a description from HTML when trafilatura returns None.
+
+    Tries meta description, then og:description.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1. Standard meta description
+    meta = soup.find("meta", attrs={"name": "description"})
+    if meta and meta.get("content", "").strip():
+        return meta["content"].strip()
+
+    # 2. OpenGraph description
+    og = soup.find("meta", property="og:description")
+    if og and og.get("content", "").strip():
+        return og["content"].strip()
+
+    return None
+
+
 class ContentExtractor:
     """
     Extracts article content from newsletter emails.
@@ -502,11 +548,19 @@ class ContentExtractor:
                 "text_length": 0,
             }
 
+        title = doc.title
+        if not title and html:
+            title = _extract_title_fallback(html)
+
+        description = doc.description
+        if not description and html:
+            description = _extract_description_fallback(html)
+
         return {
-            "title": doc.title,
+            "title": title,
             "author": doc.author,
             "date": doc.date,
-            "description": doc.description,
+            "description": description,
             "text": text,
             "sitename": doc.sitename,
             "hostname": urlparse(url).hostname,
