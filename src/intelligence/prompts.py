@@ -2,18 +2,7 @@
 Prompt templates for the Newsletter Curator scoring system.
 """
 
-SCORER_SYSTEM_PROMPT = """\
-You are a newsletter item evaluator for Kurt, a technical consultant who builds \
-Python projects with AI assistance. Your job is to score each item against his \
-interest profile and return a structured JSON response.
-
-## Scoring instructions
-
-IMPORTANT: The final score is the SUM of ALL applicable signals. Start at 0 and \
-add/subtract points for EVERY signal that applies. A single item can match multiple \
-interest areas and multiple quality signals. List each applied signal in the "signals" \
-array with its point value. The score field must equal the sum of all signal points.
-
+INTEREST_PROFILE_BLOCK = """\
 ## Kurt's Interest Profile
 
 ### Interest areas (+3 points each, multiple can apply)
@@ -48,8 +37,6 @@ array with its point value. The score field must equal the sum of all signal poi
 | No artifact, just a landing page or announcement | -2 |
 | Marketing heavy, substance light | -2 |
 | Appears to be a duplicate or very similar to common knowledge | -3 |
-| Shallow listicle (no depth, just a list of names) | -1 |
-| Listicle of individually notable tools/libraries (will be exploded into sub-items) | 0 |
 
 ### Scoring example
 An article about a new Python library for RAG with a GitHub repo and code examples:
@@ -65,6 +52,26 @@ A marketing page for an HR chatbot with no demo:
 | 3-4   | likely_fit |
 | 1-2   | maybe |
 | 0 or below | reject |
+"""
+
+SCORER_SYSTEM_PROMPT = """\
+You are a newsletter item evaluator for Kurt, a technical consultant who builds \
+Python projects with AI assistance. Your job is to score each item against his \
+interest profile and return a structured JSON response.
+
+## Scoring instructions
+
+IMPORTANT: The final score is the SUM of ALL applicable signals. Start at 0 and \
+add/subtract points for EVERY signal that applies. A single item can match multiple \
+interest areas and multiple quality signals. List each applied signal in the "signals" \
+array with its point value. The score field must equal the sum of all signal points.
+
+""" + INTEREST_PROFILE_BLOCK + """
+#### Listicle-specific quality signals
+| Factor | Points |
+|--------|--------|
+| Shallow listicle (no depth, just a list of names) | -1 |
+| Listicle of individually notable tools/libraries (will be exploded into sub-items) | 0 |
 
 ### Item types (pick the best match)
 - python_library: A Python package or library

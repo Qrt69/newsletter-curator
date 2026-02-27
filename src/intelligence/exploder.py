@@ -22,6 +22,8 @@ import anthropic
 import openai
 from json_repair import repair_json
 
+from src.intelligence.prompts import INTEREST_PROFILE_BLOCK
+
 
 # Item types that can be exploded into individual database entries
 EXPLODABLE_TYPES = {
@@ -41,6 +43,10 @@ _EXTRACTION_SYSTEM_PROMPT = """\
 You are extracting individual tools/libraries/products from a listicle article. \
 For each distinct item mentioned in the article, extract its details as a separate entry.
 
+""" + INTEREST_PROFILE_BLOCK + """
+IMPORTANT: The score is the SUM of all applicable signals. Start at 0 and add/subtract \
+points for EVERY signal that applies.
+
 Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
 {
     "items": [
@@ -49,8 +55,10 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
             "description": "<1-2 sentence description of what it does>",
             "suggested_category": "<e.g. 'Data Validation', 'LLM Framework'>",
             "tags": ["<2-5 relevant tags>"],
-            "score": <integer 0-10, based on relevance to a Python/AI developer>,
-            "reasoning": "<1 sentence explaining the score>"
+            "score": <integer, can be negative — sum of all applicable signals>,
+            "reasoning": "<1 sentence explaining the score>",
+            "signals": ["+3 matches Python libraries", "+2 has GitHub repo", ...],
+            "url": "<direct URL to tool's homepage/GitHub/docs if found in article, else null>"
         }
     ]
 }
@@ -60,11 +68,16 @@ Guidelines:
 - Each item should be independently useful as a database entry
 - Use the same verdict thresholds: 5+ = strong_fit, 3-4 = likely_fit, 1-2 = maybe, 0- = reject
 - If the article mentions a tool only in passing (1 sentence, no detail), still include it but score lower
+- If the article contains a direct URL for an item (homepage, GitHub, docs), extract it. Only use URLs actually present in the article text.
 """
 
 _PYTHON_LIBRARY_SYSTEM_PROMPT = """\
 You are extracting individual Python libraries from a listicle article. \
 For each distinct library mentioned in the article, extract its details as a separate entry.
+
+""" + INTEREST_PROFILE_BLOCK.replace("{", "{{").replace("}", "}}") + """
+IMPORTANT: The score is the SUM of all applicable signals. Start at 0 and add/subtract \
+points for EVERY signal that applies.
 
 Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
 {{
@@ -79,8 +92,10 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
             "usefulness": "<High|Medium|Low>",
             "usefulness_notes": "<brief note on practical use>",
             "tags": ["<2-5 relevant tags>"],
-            "score": <integer 0-10, based on relevance to a Python/AI developer>,
-            "reasoning": "<1 sentence explaining the score>"
+            "score": <integer, can be negative -- sum of all applicable signals>,
+            "reasoning": "<1 sentence explaining the score>",
+            "signals": ["+3 matches Python libraries", "+2 has GitHub repo", ...],
+            "url": "<direct URL to library's homepage/GitHub/PyPI if found in article, else null>"
         }}
     ]
 }}
@@ -92,7 +107,7 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
 - "UI/Apps": streamlit, reflex, nicegui, web frameworks, dashboards
 - "Infrastructure": airflow, dagster, orchestration, deployment, DevOps
 
-{category_context}
+{{category_context}}
 
 Guidelines:
 - Only extract items that are concrete Python libraries or packages -- skip generic advice or filler
@@ -100,6 +115,7 @@ Guidelines:
 - Use the same verdict thresholds: 5+ = strong_fit, 3-4 = likely_fit, 1-2 = maybe, 0- = reject
 - If the article mentions a library only in passing (1 sentence, no detail), still include it but score lower
 - Prefer assigning categories that already exist in the Notion database (listed above) when they fit
+- If the article contains a direct URL for a library (homepage, GitHub, PyPI), extract it. Only use URLs actually present in the article text.
 """
 
 _EXTRACTION_USER_TEMPLATE = """\
@@ -129,10 +145,12 @@ class ListicleExploder:
         model: str | None = None,
         max_text_chars: int = 6000,
         notion_client=None,
+        dedup_index=None,
     ):
         self._backend = backend or os.environ.get("SCORER_BACKEND", "local")
         self._max_text_chars = max_text_chars
         self._notion_client = notion_client
+        self._dedup_index = dedup_index
 
         if self._backend == "anthropic":
             key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -163,6 +181,7 @@ class ListicleExploder:
         self._total_output_tokens = 0
         self._items_exploded = 0
         self._sub_items_created = 0
+        self._dedup_filtered = 0
         self._errors = 0
 
     def _auto_detect_model(self) -> str:
@@ -359,7 +378,7 @@ class ListicleExploder:
                     "item_type": item_type,
                     "description": raw.get("description", ""),
                     "reasoning": raw.get("reasoning", ""),
-                    "signals": [],
+                    "signals": raw.get("signals", []),
                     "suggested_name": raw.get("suggested_name", ""),
                     "suggested_category": raw.get("suggested_category", ""),
                     "tags": raw.get("tags", []),
@@ -372,8 +391,8 @@ class ListicleExploder:
                     "relevance": raw.get("relevance", ""),
                     "usefulness": raw.get("usefulness", ""),
                     "usefulness_notes": raw.get("usefulness_notes", ""),
-                    # Inherit parent fields
-                    "url": url,
+                    # Prefer individual URL from LLM, fall back to parent
+                    "url": raw.get("url") or url,
                     "link_text": scored_item.get("link_text", ""),
                     "title": scored_item.get("title"),
                     "author": scored_item.get("author"),
@@ -381,6 +400,22 @@ class ListicleExploder:
                     "_email_meta": scored_item.get("_email_meta", {}),
                 }
                 sub_items.append(sub)
+
+            # Pre-dedup filtering: remove sub-items already in Notion
+            if self._dedup_index and sub_items:
+                filtered = []
+                for sub in sub_items:
+                    name = sub.get("suggested_name", "")
+                    sub_url = sub.get("url", "")
+                    matches = self._dedup_index.search(name=name, url=sub_url)
+                    if matches:
+                        match_name = matches[0].get("name", "?")
+                        print(f"    [dedup] Skipping '{name}' -- already in Notion as '{match_name}'")
+                        with self._lock:
+                            self._dedup_filtered += 1
+                    else:
+                        filtered.append(sub)
+                sub_items = filtered
 
             with self._lock:
                 self._items_exploded += 1
@@ -425,6 +460,7 @@ class ListicleExploder:
             "model": self._model,
             "items_exploded": self._items_exploded,
             "sub_items_created": self._sub_items_created,
+            "dedup_filtered": self._dedup_filtered,
             "errors": self._errors,
             "total_input_tokens": self._total_input_tokens,
             "total_output_tokens": self._total_output_tokens,

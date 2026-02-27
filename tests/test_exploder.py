@@ -25,6 +25,7 @@ def _make_exploder(**kwargs):
     ex._model = "test-model"
     ex._max_text_chars = 6000
     ex._notion_client = kwargs.get("notion_client")
+    ex._dedup_index = kwargs.get("dedup_index")
     ex._category_context = kwargs.get("category_context")
     ex._category_lock = __import__("threading").Lock()
     ex._lock = __import__("threading").Lock()
@@ -32,6 +33,7 @@ def _make_exploder(**kwargs):
     ex._total_output_tokens = 0
     ex._items_exploded = 0
     ex._sub_items_created = 0
+    ex._dedup_filtered = 0
     ex._errors = 0
     ex._openai_client = None
     ex._anthropic_client = None
@@ -292,6 +294,144 @@ def test_stats():
     assert s["model"] == "test-model"
 
 
+# ── Test 7: URL extraction ────────────────────────────────────
+
+def test_url_extraction():
+    """TEST 7: Sub-items use individual URLs when LLM provides them, fall back to parent URL when null."""
+    ex = _make_exploder(category_context="")
+
+    def fake_call_llm(system, user):
+        return (
+            '{"items": ['
+            '{"suggested_name": "httpx", "score": 6, "url": "https://github.com/encode/httpx", "signals": ["+3 Python libraries"]},'
+            '{"suggested_name": "FastAPI", "score": 7, "url": null, "signals": ["+3 Python libraries"]},'
+            '{"suggested_name": "Pydantic", "score": 5, "signals": ["+3 Python libraries"]}'
+            ']}',
+            100, 200,
+        )
+
+    ex._call_llm = fake_call_llm
+
+    scored_item = {
+        "is_listicle": True,
+        "listicle_item_type": "python_library",
+        "verdict": "strong_fit",
+        "suggested_name": "Top Python Libs",
+        "url": "https://example.com/listicle",
+        "text": "Article text...",
+    }
+
+    sub_items = ex.explode_item(scored_item)
+
+    assert len(sub_items) == 3
+    # httpx has its own URL
+    assert sub_items[0]["url"] == "https://github.com/encode/httpx"
+    # FastAPI has null URL -> falls back to parent
+    assert sub_items[1]["url"] == "https://example.com/listicle"
+    # Pydantic has no url field at all -> falls back to parent
+    assert sub_items[2]["url"] == "https://example.com/listicle"
+
+
+# ── Test 8: Signals extraction ────────────────────────────────
+
+def test_signals_extraction():
+    """TEST 8: Sub-items include signal arrays from LLM response."""
+    ex = _make_exploder()
+
+    def fake_call_llm(system, user):
+        return (
+            '{"items": ['
+            '{"suggested_name": "LangGraph", "score": 8, '
+            '"signals": ["+3 AI agents & workflows", "+3 Python libraries", "+2 has GitHub repo"]},'
+            '{"suggested_name": "SomeLib", "score": 3, "signals": ["+3 Python libraries"]}'
+            ']}',
+            100, 200,
+        )
+
+    ex._call_llm = fake_call_llm
+
+    scored_item = {
+        "is_listicle": True,
+        "listicle_item_type": "ai_tool",
+        "verdict": "strong_fit",
+        "suggested_name": "AI Tools List",
+        "url": "https://example.com",
+        "text": "Text...",
+    }
+
+    sub_items = ex.explode_item(scored_item)
+
+    assert len(sub_items) == 2
+    assert sub_items[0]["signals"] == ["+3 AI agents & workflows", "+3 Python libraries", "+2 has GitHub repo"]
+    assert sub_items[1]["signals"] == ["+3 Python libraries"]
+
+
+# ── Test 9: Dedup filtering ──────────────────────────────────
+
+def test_dedup_filtering():
+    """TEST 9: Sub-items already in Notion are filtered out via DedupIndex."""
+    mock_dedup = MagicMock()
+
+    # First item matches, second and third don't
+    def fake_search(name=None, url=None):
+        if name == "httpx":
+            return [{"name": "httpx", "database": "Python Libraries"}]
+        return []
+    mock_dedup.search = fake_search
+
+    ex = _make_exploder(dedup_index=mock_dedup)
+
+    def fake_call_llm(system, user):
+        return (
+            '{"items": ['
+            '{"suggested_name": "httpx", "score": 6},'
+            '{"suggested_name": "FastAPI", "score": 7},'
+            '{"suggested_name": "Pydantic", "score": 5}'
+            ']}',
+            100, 200,
+        )
+
+    ex._call_llm = fake_call_llm
+
+    scored_item = {
+        "is_listicle": True,
+        "listicle_item_type": "ai_tool",
+        "verdict": "strong_fit",
+        "suggested_name": "Tools List",
+        "url": "https://example.com",
+        "text": "Text...",
+    }
+
+    sub_items = ex.explode_item(scored_item)
+
+    # httpx was filtered out
+    assert len(sub_items) == 2
+    names = [s["suggested_name"] for s in sub_items]
+    assert "httpx" not in names
+    assert "FastAPI" in names
+    assert "Pydantic" in names
+
+    # Stats reflect the filtering
+    assert ex._dedup_filtered == 1
+    assert ex.stats()["dedup_filtered"] == 1
+
+
+# ── Test 10: Interest profile in prompt ──────────────────────
+
+def test_interest_profile_in_prompt():
+    """TEST 10: System prompt contains key interest profile elements."""
+    from src.intelligence.exploder import _EXTRACTION_SYSTEM_PROMPT, _PYTHON_LIBRARY_SYSTEM_PROMPT
+
+    # Both prompts should include the interest profile
+    for prompt in [_EXTRACTION_SYSTEM_PROMPT, _PYTHON_LIBRARY_SYSTEM_PROMPT]:
+        assert "+3 points each" in prompt, "Should include interest area scoring"
+        assert "Rejection criteria" in prompt, "Should include rejection criteria"
+        assert "DuckDB ecosystem" in prompt, "Should include DuckDB interest"
+        assert "Verdict thresholds" in prompt, "Should include verdict thresholds"
+        assert "signals" in prompt, "Should mention signals in JSON schema"
+        assert "url" in prompt, "Should mention url in JSON schema"
+
+
 if __name__ == "__main__":
     test_should_explode()
     print("TEST 1: should_explode - PASSED")
@@ -335,4 +475,16 @@ if __name__ == "__main__":
     test_stats()
     print("TEST 6: stats tracking - PASSED")
 
-    print("\nAll 14 tests passed!")
+    test_url_extraction()
+    print("TEST 7: URL extraction - PASSED")
+
+    test_signals_extraction()
+    print("TEST 8: signals extraction - PASSED")
+
+    test_dedup_filtering()
+    print("TEST 9: dedup filtering - PASSED")
+
+    test_interest_profile_in_prompt()
+    print("TEST 10: interest profile in prompt - PASSED")
+
+    print("\nAll 18 tests passed!")

@@ -248,10 +248,15 @@ async def _run_pipeline_inner(model: str | None = None):
             if field not in result and original.get(field):
                 result[field] = original[field]
 
-    # 3b. Explode listicles
-    from src.intelligence.exploder import ListicleExploder
+    # 3b. Build dedup index (used by both Exploder and Router)
     nc = NotionClient()
-    exploder = ListicleExploder(notion_client=nc)
+    _write_progress("Building dedup index from Notion...")
+    dedup = DedupIndex(nc)
+    dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
+
+    # 3c. Explode listicles
+    from src.intelligence.exploder import ListicleExploder
+    exploder = ListicleExploder(notion_client=nc, dedup_index=dedup)
     pre_count = len(scored)
     scored = exploder.process_batch(scored)
     if len(scored) != pre_count:
@@ -261,12 +266,9 @@ async def _run_pipeline_inner(model: str | None = None):
         print(f"  Exploder stats: {exploder_stats}")
 
     # 4. Route items
-    _write_progress("Building dedup index from Notion...")
-    print("\n[4/5] Routing items...")
-    dedup = DedupIndex(nc)
-    dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
     _write_progress("Routing items...")
-    router = Router(dedup)
+    print("\n[4/5] Routing items...")
+    router = Router(dedup)  # Reuse dedup index, no second build
     decisions = router.route_batch(scored)
     summary = Router.summary(decisions)
     print(f"  Routing summary: {summary['by_action']}")
