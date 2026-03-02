@@ -130,11 +130,26 @@ Return ONLY valid JSON (no markdown fences, no extra text) with these fields:
 }
 
 ### Listicle detection
+IMPORTANT: Articles that list multiple individual tools, libraries, or products MUST be flagged \
+as listicles so they can be exploded into separate database entries.
+
 Set `is_listicle: true` when the article is a list/roundup of multiple individual tools, libraries, \
-or products that could each be a separate database entry (e.g. "10 Python Libraries for Data Science", \
-"Best AI Tools for 2025"). Set `listicle_item_type` to the item_type that best describes the \
-individual sub-items (e.g. "python_library", "ai_tool"). Leave `listicle_item_type` as null if the \
-listicle contains mixed types or types that don't match tool/library categories.
+or products that could each be a separate database entry. Set `listicle_item_type` to the item_type \
+that best describes the individual sub-items (e.g. "python_library", "ai_tool").
+
+Common listicle title patterns (these are almost ALWAYS listicles):
+- "3 Python Libraries That..." -> is_listicle=true, listicle_item_type="python_library"
+- "10 Best AI Tools for 2025" -> is_listicle=true, listicle_item_type="ai_tool"
+- "Top 5 Developer Tools..." -> is_listicle=true, listicle_item_type="coding_tool"
+- "N Best Frameworks/Platforms..." -> is_listicle=true, listicle_item_type depends on content
+- Any article with a numbered list of individually notable items in the title
+
+When in doubt about a numbered-list article, prefer setting is_listicle=true. The explosion step \
+will handle extracting individual items. Setting is_listicle=false on an actual listicle means \
+the individual items are LOST.
+
+Leave `listicle_item_type` as null ONLY if the listicle contains mixed types that don't fit a \
+single category, or types that don't match tool/library categories.
 """
 
 SCORER_USER_TEMPLATE = """\

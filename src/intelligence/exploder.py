@@ -35,6 +35,83 @@ EXPLODABLE_TYPES = {
     "platform_infra",
 }
 
+# Keyword patterns that map title words to listicle_item_type.
+# Order matters: more specific patterns come first.
+_LISTICLE_KEYWORD_MAP = [
+    # Python-specific
+    (r"python\s+(?:libraries|packages|modules)", "python_library"),
+    (r"(?:libraries|packages)\s+(?:for|in|to)\s+python", "python_library"),
+    (r"pip\s+(?:packages|installs)", "python_library"),
+    (r"pypi\s+(?:packages|libraries)", "python_library"),
+    # DuckDB
+    (r"duckdb\s+extensions?", "duckdb_extension"),
+    # AI tools
+    (r"ai\s+(?:tools?|apps?|products?|services?)", "ai_tool"),
+    (r"(?:llm|genai|generative\s+ai)\s+tools?", "ai_tool"),
+    # Coding tools
+    (r"(?:coding|developer|dev)\s+tools?", "coding_tool"),
+    (r"(?:ide|editor)\s+(?:plugins?|extensions?|tools?)", "coding_tool"),
+    (r"ai\s+(?:coding|programming)\s+(?:tools?|assistants?)", "coding_tool"),
+    # Vibe coding
+    (r"vibe\s+coding\s+tools?", "vibe_coding_tool"),
+    # Platform/infra
+    (r"(?:devops|infrastructure|cloud)\s+tools?", "platform_infra"),
+    # Generic (must come last)
+    (r"(?:python\s+)?libraries", "python_library"),
+    (r"(?:open[\s-]?source\s+)?(?:tools|frameworks|platforms|extensions|agents)", "ai_tool"),
+]
+
+# Regex requiring a number before optional adjectives — anchors the listicle pattern.
+_LISTICLE_NUMBER_RE = re.compile(
+    r"(?:^|\b)(\d+)\s+(?:best\s+|top\s+|must[\s-]?have\s+|essential\s+|amazing\s+|"
+    r"useful\s+|awesome\s+|new\s+|free\s+|great\s+|favorite\s+|powerful\s+|cool\s+|"
+    r"underrated\s+)?",
+    re.IGNORECASE,
+)
+
+
+def detect_listicle_from_title(item: dict) -> dict | None:
+    """
+    Detect listicle articles from title patterns when the scorer missed it.
+
+    Looks for patterns like "N <adjective>? <keyword>" in the title, e.g.:
+        "3 Python Libraries That Almost Replaced Entire Tools for Me"
+        "10 Best AI Tools for 2025"
+        "Top 5 DuckDB Extensions You Should Try"
+
+    Returns the same item dict with is_listicle/listicle_item_type set,
+    or None if no listicle pattern was detected.
+    """
+    if item.get("is_listicle"):
+        return None
+
+    if item.get("verdict") in ("reject", "error"):
+        return None
+
+    candidates = [
+        item.get("suggested_name", ""),
+        item.get("title", ""),
+        item.get("link_text", ""),
+    ]
+
+    for text in candidates:
+        if not text:
+            continue
+
+        if not _LISTICLE_NUMBER_RE.search(text):
+            continue
+
+        text_lower = text.lower()
+        for pattern, item_type in _LISTICLE_KEYWORD_MAP:
+            if re.search(pattern, text_lower):
+                if item_type in EXPLODABLE_TYPES:
+                    item["is_listicle"] = True
+                    item["listicle_item_type"] = item_type
+                    return item
+
+    return None
+
+
 # Defaults for local LM Studio backend
 _DEFAULT_LLM_BASE_URL = "http://localhost:1234/v1"
 _DEFAULT_LLM_API_KEY = "lm-studio"
@@ -182,6 +259,7 @@ class ListicleExploder:
         self._items_exploded = 0
         self._sub_items_created = 0
         self._dedup_filtered = 0
+        self._heuristic_detected = 0
         self._errors = 0
 
     def _auto_detect_model(self) -> str:
@@ -430,20 +508,43 @@ class ListicleExploder:
 
     def process_batch(self, scored_items: list[dict]) -> list[dict]:
         """
-        Process a batch of scored items: replace eligible listicles with
-        their extracted sub-items, pass through everything else unchanged.
+        Process a batch of scored items: detect and explode listicles,
+        keeping parent articles alongside extracted sub-items.
 
-        If extraction fails for a listicle, the parent item is kept.
+        Title-based heuristic runs first for items the scorer didn't flag.
+        When explosion succeeds, the parent is re-typed as "article" and
+        kept in the result list alongside the sub-items.
+        If extraction fails for a listicle, the parent item is kept as-is.
         """
         result = []
         for item in scored_items:
+            # Title-based heuristic: catch listicles the scorer missed
+            if not item.get("is_listicle"):
+                detected = detect_listicle_from_title(item)
+                if detected:
+                    name = (item.get("suggested_name") or "?")[:50]
+                    name = name.encode("ascii", errors="replace").decode("ascii")
+                    itype = item.get("listicle_item_type", "?")
+                    print(f"  [heuristic] Title pattern detected listicle: {name} -> {itype}")
+                    with self._lock:
+                        self._heuristic_detected += 1
+
             if self.should_explode(item):
                 name = (item.get("suggested_name") or "?")[:50]
                 name = name.encode("ascii", errors="replace").decode("ascii")
                 print(f"  Exploding listicle: {name}")
                 sub_items = self.explode_item(item)
                 if sub_items:
-                    print(f"    -> Extracted {len(sub_items)} sub-items")
+                    print(f"    -> Extracted {len(sub_items)} sub-items, keeping parent as article")
+                    # Re-type parent as a plain article and keep it
+                    parent = dict(item)  # shallow copy
+                    parent["item_type"] = "article"
+                    parent["is_listicle"] = False
+                    parent["listicle_item_type"] = None
+                    for field in ("pillar", "overlap", "relevance",
+                                  "usefulness", "usefulness_notes"):
+                        parent[field] = ""
+                    result.append(parent)
                     result.extend(sub_items)
                 else:
                     # Graceful degradation: keep the parent if extraction fails
@@ -461,6 +562,7 @@ class ListicleExploder:
             "items_exploded": self._items_exploded,
             "sub_items_created": self._sub_items_created,
             "dedup_filtered": self._dedup_filtered,
+            "heuristic_detected": self._heuristic_detected,
             "errors": self._errors,
             "total_input_tokens": self._total_input_tokens,
             "total_output_tokens": self._total_output_tokens,
