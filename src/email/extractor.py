@@ -200,10 +200,12 @@ def _is_non_article_url(url: str) -> bool:
         return False
 
     # Substack: tracking redirects (/redirect/) are real article links — let them through.
-    # Only allow /p/ (actual posts) and /redirect/ (tracking URLs resolved later).
+    # /p/ = direct post, /redirect/ = tracking URL, /pub/*/p/ = open.substack.com posts.
     if "substack.com" in hostname:
         if segments and segments[0] in ("p", "redirect"):
             return False
+        if segments and segments[0] == "pub" and "p" in segments:
+            return False  # open.substack.com/pub/<name>/p/<slug>
         return True
 
     # Beehiiv: tracking subdomains (link.mail.beehiiv.com) are redirects — let them through.
@@ -444,16 +446,16 @@ class ContentExtractor:
             resp = self._client.head(url)
             if resp.status_code < 400:
                 resolved = str(resp.url)
-        except httpx.HTTPError:
-            pass
+        except Exception:
+            pass  # httpx.HTTPError, httpx.InvalidURL, or other transport errors
 
         if not resolved:
             try:
                 resp = self._client.get(url)
                 if resp.status_code < 400:
                     resolved = str(resp.url)
-            except httpx.HTTPError:
-                pass
+            except Exception:
+                pass  # httpx.HTTPError, httpx.InvalidURL, or other transport errors
 
         if resolved:
             # If resolved URL is still on a tracking domain, try browser
@@ -571,7 +573,7 @@ class ContentExtractor:
 
     # ── Full pipeline ─────────────────────────────────────────────
 
-    def _process_link(self, link: dict) -> dict:
+    def _process_link(self, link: dict) -> dict | None:
         """
         Process a single link: resolve tracking redirect and extract article.
 
@@ -579,11 +581,35 @@ class ContentExtractor:
             link: Dict with keys url, link_text.
 
         Returns:
-            Dict with source_url, resolved_url, link_text, and article fields.
+            Dict with source_url, resolved_url, link_text, and article fields,
+            or None if the link should be skipped.
         """
         source_url = link["url"]
         link_text = link["link_text"]
 
+        try:
+            return self._process_link_inner(source_url, link_text)
+        except Exception as exc:
+            # Never let a single bad link crash the entire email extraction
+            print(f"    [warn] Failed to process link: {source_url[:100]} — {exc}")
+            return {
+                "source_url": source_url,
+                "resolved_url": source_url,
+                "link_text": link_text,
+                "title": None,
+                "author": None,
+                "date": None,
+                "description": None,
+                "text": None,
+                "sitename": None,
+                "hostname": urlparse(source_url).hostname,
+                "extraction_status": "process_failed",
+                "error": str(exc),
+                "text_length": 0,
+            }
+
+    def _process_link_inner(self, source_url: str, link_text: str) -> dict | None:
+        """Inner processing logic for a single link (may raise)."""
         resolved_url, resolve_error = self.resolve_url(source_url)
 
         # Post-resolution filter: tracking URL may resolve to a non-article page
