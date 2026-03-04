@@ -436,6 +436,10 @@ class ListicleExploder:
             if not raw_items:
                 return []
 
+            # Build set of URLs actually present in the article for validation
+            article_text = scored_item.get("text") or ""
+            article_urls = set(re.findall(r"https?://[^\s<>\"')\]]+", article_text))
+
             sub_items = []
             for raw in raw_items:
                 score = int(raw.get("score", 0))
@@ -449,6 +453,12 @@ class ListicleExploder:
                     verdict = "maybe"
                 else:
                     verdict = "reject"
+
+                # Only trust LLM-extracted URLs that actually appear in the article text;
+                # local models often hallucinate plausible-looking URLs that don't exist.
+                raw_url = raw.get("url") or ""
+                if raw_url and raw_url not in article_urls:
+                    raw_url = ""  # Hallucinated — discard
 
                 sub = {
                     "score": score,
@@ -469,8 +479,8 @@ class ListicleExploder:
                     "relevance": raw.get("relevance", ""),
                     "usefulness": raw.get("usefulness", ""),
                     "usefulness_notes": raw.get("usefulness_notes", ""),
-                    # Prefer individual URL from LLM, fall back to parent
-                    "url": raw.get("url") or url,
+                    # Prefer verified individual URL, fall back to parent article
+                    "url": raw_url or url,
                     "link_text": scored_item.get("link_text", ""),
                     "title": scored_item.get("title"),
                     "author": scored_item.get("author"),
