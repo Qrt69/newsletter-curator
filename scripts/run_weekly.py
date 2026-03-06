@@ -48,7 +48,32 @@ DATA_DIR = os.environ.get("DATA_DIR", ".")
 DB_PATH = os.path.join(DATA_DIR, "digest.db")
 LOCK_FILE = os.path.join(DATA_DIR, ".pipeline_running")
 PROGRESS_FILE = os.path.join(DATA_DIR, ".pipeline_progress")
+CANCEL_FILE = os.path.join(DATA_DIR, ".pipeline_cancel")
 LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
+
+
+class PipelineCancelled(Exception):
+    """Raised when force-stop is triggered."""
+    pass
+
+
+def _is_cancelled() -> bool:
+    """Check if the cancel file exists (set by force-stop)."""
+    return os.path.exists(CANCEL_FILE)
+
+
+def _clear_cancel():
+    """Remove the cancel file."""
+    try:
+        os.remove(CANCEL_FILE)
+    except OSError:
+        pass
+
+
+def _check_cancel():
+    """Raise PipelineCancelled if force-stop was requested."""
+    if _is_cancelled():
+        raise PipelineCancelled("Pipeline force-stopped by user")
 
 
 def _write_progress(msg: str):
@@ -116,10 +141,16 @@ async def run_pipeline(model: str | None = None):
         print("Pipeline is already running. Skipping.")
         return
 
+    _clear_cancel()  # Clear any stale cancel from previous run
+
     try:
         await _run_pipeline_inner(model=model)
+    except PipelineCancelled:
+        _write_progress("Force stopped -- no emails moved")
+        print("\n*** Pipeline force-stopped. No emails were moved to 'Processed'. ***")
     finally:
         _clear_progress()
+        _clear_cancel()
         _release_lock(token)
 
 
@@ -176,12 +207,15 @@ async def _run_pipeline_inner(model: str | None = None):
             print("\n[1b] No Medium/Beehiiv links found, skipping browser login")
             browser_fetcher = BrowserFetcher()
 
+    _check_cancel()
+
     # 2. Extract content
     _write_progress("Extracting content...")
     print("\n[2/5] Extracting content...")
     extractor = ContentExtractor(browser_fetcher=browser_fetcher)
     all_items = []
     for i, email in enumerate(emails, 1):
+        _check_cancel()
         subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
         _write_progress(f"Extracting content ({i}/{len(emails)} emails)")
         print(f"  [{i}/{len(emails)}] {subject}")
@@ -205,6 +239,8 @@ async def _run_pipeline_inner(model: str | None = None):
         print("  No items extracted. Done.")
         return
 
+    _check_cancel()
+
     # 3. Score items (with feedback learning)
     _write_progress("Scoring items...")
     print("\n[3/5] Scoring items...")
@@ -227,7 +263,7 @@ async def _run_pipeline_inner(model: str | None = None):
         _write_progress(f"Scoring ({i}/{total} items)")
 
     try:
-        scored = scorer.score_batch(all_items, on_progress=_scoring_progress)
+        scored = scorer.score_batch(all_items, on_progress=_scoring_progress, cancel_check=_is_cancelled)
     except ConnectionError as exc:
         _write_progress(f"ERROR: {exc}")
         print(f"\n  *** SCORING ABORTED: {exc}")
@@ -248,22 +284,28 @@ async def _run_pipeline_inner(model: str | None = None):
             if field not in result and original.get(field):
                 result[field] = original[field]
 
+    _check_cancel()
+
     # 3b. Build dedup index (used by both Exploder and Router)
     nc = NotionClient()
     _write_progress("Building dedup index from Notion...")
     dedup = DedupIndex(nc)
     dedup.build()  # Always fresh from Notion — never trust cache for pipeline runs
 
+    _check_cancel()
+
     # 3c. Explode listicles
     from src.intelligence.exploder import ListicleExploder
     exploder = ListicleExploder(notion_client=nc, dedup_index=dedup)
     pre_count = len(scored)
-    scored = exploder.process_batch(scored)
+    scored = exploder.process_batch(scored, cancel_check=_is_cancelled)
     if len(scored) != pre_count:
         print(f"  Exploded listicles: {pre_count} -> {len(scored)} items")
     exploder_stats = exploder.stats()
     if exploder_stats["items_exploded"] > 0:
         print(f"  Exploder stats: {exploder_stats}")
+
+    _check_cancel()
 
     # 4. Route items
     _write_progress("Routing items...")

@@ -665,7 +665,13 @@ async def _api_write_notion(request):
 
 
 async def _api_pipeline_force_stop(request):
-    """Force-stop the pipeline by removing the lock file."""
+    """Force-stop the pipeline by signalling cancellation and removing the lock file."""
+    cancel_path = os.path.join(_DATA_DIR, ".pipeline_cancel")
+    try:
+        with open(cancel_path, "w") as f:
+            f.write("cancel")
+    except OSError:
+        pass
     try:
         os.remove(_LOCK_FILE)
     except OSError:

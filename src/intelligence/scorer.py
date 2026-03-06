@@ -317,6 +317,7 @@ class Scorer:
         items: list[dict],
         max_workers: int | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> list[dict]:
         """
         Score a list of items in parallel with progress output.
@@ -326,6 +327,7 @@ class Scorer:
             max_workers: Number of concurrent scoring threads.
                          Defaults to 1 for local backend, 4 for anthropic.
             on_progress: Optional callback(current, total) called after each item is scored.
+            cancel_check: Optional callable returning True if the batch should stop.
 
         Returns:
             List of scored dicts (same order as input).
@@ -338,9 +340,15 @@ class Scorer:
 
         total = len(items)
         self._consecutive_errors = 0
+        self._cancelled = False
 
         def _score_one(args: tuple[int, dict]) -> dict:
             i, item = args
+
+            # Check cancellation before starting a new LLM call
+            if self._cancelled or (cancel_check and cancel_check()):
+                self._cancelled = True
+                return self._error_result(item, "skipped: pipeline cancelled")
 
             # Fail fast: if too many consecutive errors, skip remaining items
             if self._consecutive_errors >= self._FAIL_FAST_THRESHOLD:

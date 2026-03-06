@@ -122,8 +122,16 @@ class DigestState(rx.State):
             self._load_items()
 
     def force_stop_pipeline(self) -> None:
-        """Force-stop the pipeline by removing the lock file."""
+        """Force-stop the pipeline by signalling cancellation and removing the lock file."""
         data_dir = os.environ.get("DATA_DIR", ".")
+        # Signal cancellation first — pipeline checks this before each LLM call
+        cancel_path = os.path.join(data_dir, ".pipeline_cancel")
+        try:
+            with open(cancel_path, "w") as f:
+                f.write("cancel")
+        except OSError:
+            pass
+        # Then remove the lock file
         lock_path = os.path.join(data_dir, ".pipeline_running")
         try:
             os.remove(lock_path)

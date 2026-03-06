@@ -17,6 +17,7 @@ import os
 import re
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 
 import anthropic
 import openai
@@ -537,7 +538,11 @@ class ListicleExploder:
             print(f"  Exploder API error for '{title}': {exc}")
             return []
 
-    def process_batch(self, scored_items: list[dict]) -> list[dict]:
+    def process_batch(
+        self,
+        scored_items: list[dict],
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> list[dict]:
         """
         Process a batch of scored items: detect and explode listicles,
         keeping parent articles alongside extracted sub-items.
@@ -549,6 +554,10 @@ class ListicleExploder:
         """
         result = []
         for item in scored_items:
+            # Check cancellation before each LLM call
+            if cancel_check and cancel_check():
+                result.append(item)
+                continue
             # Title-based heuristic: catch listicles the scorer missed
             if not item.get("is_listicle"):
                 detected = detect_listicle_from_title(item)
