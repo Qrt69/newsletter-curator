@@ -140,6 +140,12 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
     ]
 }
 
+CRITICAL: Only extract items that are EXPLICITLY NAMED in the article text. \
+NEVER invent, guess, or infer names based on the topic. If the article is about \
+"fast Python data libraries" do NOT guess which libraries might be relevant -- \
+only extract names that literally appear in the text. If a name does not appear \
+in the article text provided below, do NOT include it.
+
 Guidelines:
 - Only extract items that are concrete tools, libraries, or products -- skip generic advice or filler
 - Each item should be independently useful as a database entry
@@ -185,6 +191,12 @@ Return ONLY valid JSON (no markdown fences, no extra text) with this structure:
 - "Infrastructure": airflow, dagster, orchestration, deployment, DevOps
 
 {{category_context}}
+
+CRITICAL: Only extract libraries that are EXPLICITLY NAMED in the article text. \
+NEVER invent, guess, or infer library names based on the topic. If the article is about \
+"fast Python data libraries" do NOT guess which libraries might be relevant -- \
+only extract names that literally appear in the text. If a library name does not appear \
+in the article text provided below, do NOT include it.
 
 Guidelines:
 - Only extract items that are concrete Python libraries or packages -- skip generic advice or filler
@@ -440,8 +452,17 @@ class ListicleExploder:
             article_text = scored_item.get("text") or ""
             article_urls = set(re.findall(r"https?://[^\s<>\"')\]]+", article_text))
 
+            # Build lowercase article text for name validation
+            article_text_lower = (scored_item.get("text") or "").lower()
+
             sub_items = []
             for raw in raw_items:
+                # Validate: name must actually appear in the article text
+                raw_name = raw.get("suggested_name", "")
+                if raw_name and article_text_lower and raw_name.lower() not in article_text_lower:
+                    print(f"    [hallucination] Dropping '{raw_name}' -- not found in article text")
+                    continue
+
                 score = int(raw.get("score", 0))
 
                 # Derive verdict from score (same as Scorer)

@@ -209,7 +209,7 @@ def test_verdict_derived_from_score():
         "verdict": "strong_fit",
         "suggested_name": "Test Listicle",
         "url": "https://example.com",
-        "text": "Some article text",
+        "text": "Article about Lib1, Lib2, and Lib3 tools.",
     }
 
     sub_items = ex.explode_item(scored_item)
@@ -245,7 +245,7 @@ def test_python_library_extra_fields():
         "verdict": "strong_fit",
         "suggested_name": "10 Python Libraries",
         "url": "https://example.com",
-        "text": "Article about Python libs...",
+        "text": "Article about Polars and other Python libs for data science.",
     }
 
     sub_items = ex.explode_item(scored_item)
@@ -279,7 +279,7 @@ def test_stats():
         "verdict": "strong_fit",
         "suggested_name": "Tools List",
         "url": "https://example.com",
-        "text": "Text...",
+        "text": "Article about A, a great AI tool.",
     }
 
     ex.explode_item(scored_item)
@@ -319,13 +319,13 @@ def test_url_extraction():
         "verdict": "strong_fit",
         "suggested_name": "Top Python Libs",
         "url": "https://example.com/listicle",
-        "text": "Article text...",
+        "text": "Article about httpx (https://github.com/encode/httpx), FastAPI, and Pydantic.",
     }
 
     sub_items = ex.explode_item(scored_item)
 
     assert len(sub_items) == 3
-    # httpx has its own URL
+    # httpx has its own URL that appears in article text
     assert sub_items[0]["url"] == "https://github.com/encode/httpx"
     # FastAPI has null URL -> falls back to parent
     assert sub_items[1]["url"] == "https://example.com/listicle"
@@ -357,7 +357,7 @@ def test_signals_extraction():
         "verdict": "strong_fit",
         "suggested_name": "AI Tools List",
         "url": "https://example.com",
-        "text": "Text...",
+        "text": "Article about LangGraph and SomeLib for AI workflows.",
     }
 
     sub_items = ex.explode_item(scored_item)
@@ -400,12 +400,12 @@ def test_dedup_filtering():
         "verdict": "strong_fit",
         "suggested_name": "Tools List",
         "url": "https://example.com",
-        "text": "Text...",
+        "text": "Article about httpx, FastAPI, and Pydantic.",
     }
 
     sub_items = ex.explode_item(scored_item)
 
-    # httpx was filtered out
+    # httpx was filtered out by dedup
     assert len(sub_items) == 2
     names = [s["suggested_name"] for s in sub_items]
     assert "httpx" not in names
@@ -546,7 +546,7 @@ def test_process_batch_preserves_parent():
         "item_type": "python_library",
         "suggested_name": "3 Python Libraries for Testing",
         "url": "https://example.com/listicle",
-        "text": "Article text...",
+        "text": "Article about LibA and LibB for testing.",
         "pillar": "Core Python",
         "overlap": "some overlap",
         "relevance": "some relevance",
@@ -595,7 +595,7 @@ def test_process_batch_parent_not_mutated():
         "item_type": "python_library",
         "suggested_name": "5 Libs",
         "url": "https://example.com",
-        "text": "Text...",
+        "text": "Article about X library.",
     }
 
     original_type = parent["item_type"]
@@ -627,7 +627,7 @@ def test_process_batch_heuristic_then_explode():
         "item_type": "article",
         "suggested_name": "5 Best AI Tools for Developers",
         "url": "https://example.com/ai-tools",
-        "text": "Here are 5 AI tools...",
+        "text": "Here are 5 AI tools including ToolX for code generation.",
         "_email_meta": {"email_id": "xyz"},
     }
 
@@ -643,6 +643,70 @@ def test_process_batch_heuristic_then_explode():
 
     # Heuristic counter should have incremented
     assert ex.stats()["heuristic_detected"] == 1
+
+
+# ── Test 18: Hallucinated name filtering ──────────────────────
+
+def test_hallucinated_names_filtered():
+    """TEST 18: Sub-items with names not in article text are filtered out."""
+    ex = _make_exploder(category_context="")
+
+    def fake_call_llm(system, user):
+        return (
+            '{"items": ['
+            '{"suggested_name": "Modin", "score": 6},'
+            '{"suggested_name": "Polars", "score": 8},'
+            '{"suggested_name": "Pandarallel", "score": 5},'
+            '{"suggested_name": "DuckDB", "score": 7}'
+            ']}',
+            100, 200,
+        )
+
+    ex._call_llm = fake_call_llm
+
+    scored_item = {
+        "is_listicle": True,
+        "listicle_item_type": "python_library",
+        "verdict": "strong_fit",
+        "suggested_name": "5 Faster Python Libraries",
+        "url": "https://example.com",
+        "text": "This article covers Modin, Polars, and DuckDB for working with massive datasets.",
+    }
+
+    sub_items = ex.explode_item(scored_item)
+
+    # Pandarallel is NOT in the article text, should be filtered out
+    names = [s["suggested_name"] for s in sub_items]
+    assert "Modin" in names
+    assert "Polars" in names
+    assert "DuckDB" in names
+    assert "Pandarallel" not in names, "Pandarallel should be filtered -- not in article text"
+    assert len(sub_items) == 3
+
+
+def test_hallucination_filter_skipped_when_no_text():
+    """TEST 19: When article text is empty, name validation is skipped (no false drops)."""
+    ex = _make_exploder(category_context="")
+
+    def fake_call_llm(system, user):
+        return ('{"items": [{"suggested_name": "SomeTool", "score": 5}]}', 50, 100)
+
+    ex._call_llm = fake_call_llm
+
+    scored_item = {
+        "is_listicle": True,
+        "listicle_item_type": "ai_tool",
+        "verdict": "strong_fit",
+        "suggested_name": "AI Tools List",
+        "url": "https://example.com",
+        "text": "",  # No article text available
+    }
+
+    sub_items = ex.explode_item(scored_item)
+
+    # Should NOT filter when text is empty
+    assert len(sub_items) == 1
+    assert sub_items[0]["suggested_name"] == "SomeTool"
 
 
 if __name__ == "__main__":
@@ -721,4 +785,10 @@ if __name__ == "__main__":
     test_process_batch_heuristic_then_explode()
     print("TEST 17: heuristic then explode - PASSED")
 
-    print("\nAll 25 tests passed!")
+    test_hallucinated_names_filtered()
+    print("TEST 18: hallucinated names filtered - PASSED")
+
+    test_hallucination_filter_skipped_when_no_text()
+    print("TEST 19: hallucination filter skipped when no text - PASSED")
+
+    print("\nAll tests passed!")
