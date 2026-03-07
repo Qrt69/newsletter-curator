@@ -322,15 +322,15 @@ MEDIUM_PASSWORD=xxxx
 
 | Component | Technology |
 |-----------|------------|
-| Language | Python 3.12+ |
+| Language | Python 3.13+ |
 | Package manager | uv |
 | Notion API | notion-client |
 | Email | Microsoft Graph API (msgraph-sdk) |
-| Web scraping | Playwright |
-| LLM | Anthropic Claude API |
-| Database | SQLite |
+| Content extraction | trafilatura, BeautifulSoup, Playwright (Medium/Beehiiv fallback) |
+| LLM (scoring) | Dual backend: local (LM Studio/OpenAI-compatible) or Anthropic Claude API |
+| Database | SQLite (WAL mode) |
 | Web framework | Reflex |
-| Deployment | Hetzner VPS |
+| Deployment | Docker + Caddy reverse proxy + Redis on Hetzner VPS |
 
 ---
 
@@ -346,39 +346,34 @@ newsletter-curator/
 ├── src/
 │   ├── __init__.py
 │   │
-│   ├── notion/              # Phase 1
-│   │   ├── __init__.py
-│   │   ├── client.py        # Notion API wrapper
-│   │   └── dedup.py         # Dedup index
+│   ├── notion/
+│   │   ├── client.py        # Notion API wrapper (14 databases)
+│   │   ├── writer.py        # Write accepted items to Notion (per-DB property mappers)
+│   │   └── dedup.py         # In-memory dedup index (fuzzy name + URL matching)
 │   │
-│   ├── email/               # Phase 2
-│   │   ├── __init__.py
-│   │   ├── fetcher.py       # M365 Graph API
-│   │   └── extractor.py     # Content extraction
+│   ├── email/
+│   │   ├── fetcher.py       # M365 Graph API email fetching
+│   │   ├── extractor.py     # Link parsing, content extraction, parallel ThreadPoolExecutor
+│   │   └── browser.py       # Playwright for Medium/Beehiiv magic-link auth
 │   │
-│   ├── intelligence/        # Phase 3
-│   │   ├── __init__.py
-│   │   ├── scorer.py        # LLM scoring
-│   │   ├── router.py        # Database routing
-│   │   └── prompts.py       # Prompt templates
+│   ├── intelligence/
+│   │   ├── scorer.py        # Dual backend LLM scoring (local/anthropic), context overflow handling
+│   │   ├── router.py        # Route items to Notion databases + dedup check
+│   │   ├── prompts.py       # Scorer system prompt with interest profile
+│   │   ├── exploder.py      # Listicle detection + sub-item extraction via LLM
+│   │   └── feedback.py      # Learning loop, rule proposals from user decisions
 │   │
-│   ├── storage/             # Phase 4
-│   │   ├── __init__.py
-│   │   ├── models.py        # SQLite models
-│   │   └── feedback.py      # Feedback tracking
+│   ├── storage/
+│   │   └── digest.py        # SQLite store for runs, items, feedback
 │   │
-│   └── web/                 # Phase 4
-│       ├── __init__.py
-│       └── app.py           # Reflex app
+│   └── web/
+│       ├── app.py           # Reflex UI components & Starlette API endpoints
+│       └── state.py         # Reflex state management (DigestState)
 │
-├── tests/
-│   ├── test_notion.py
-│   ├── test_dedup.py
-│   └── ...
+├── tests/                   # Test suite covering all components
 │
 └── scripts/
-    ├── run_weekly.py        # Main entry point
-    └── test_connection.py   # Connection tests
+    └── run_weekly.py        # Pipeline orchestration, scheduler, CLI
 ```
 
 ---
@@ -402,16 +397,19 @@ Example start:
 
 ## Success Criteria
 
-- [ ] Can fetch emails from M365 newsletter folder
-- [ ] Can extract content from Medium with login
-- [ ] Can check Notion for duplicates across all databases
-- [ ] Can score items with LLM
-- [ ] Can route items to correct database
-- [ ] Web interface shows digest
-- [ ] Clicking item shows details
-- [ ] Accept saves to Notion with relations
-- [ ] Feedback is stored
-- [ ] System suggests rule improvements over time
+- [x] Can fetch emails from M365 newsletter folder
+- [x] Can extract content from Medium with login
+- [x] Can check Notion for duplicates across all databases
+- [x] Can score items with LLM (dual backend: local + Claude API)
+- [x] Can route items to correct database
+- [x] Web interface shows digest with skip reason badges
+- [x] Clicking item shows details with dedup match info
+- [x] Accept saves to Notion with correct field mapping
+- [x] Feedback is stored
+- [x] System suggests rule improvements over time
+- [x] Listicle articles exploded into individual sub-items
+- [x] Context overflow handling for local LLM backend
+- [x] Docker deployment on Hetzner VPS
 
 ---
 
