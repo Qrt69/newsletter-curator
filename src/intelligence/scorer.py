@@ -280,13 +280,11 @@ class Scorer:
                 if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
                     last_error = f"context_overflow: {err_str[:200]}"
 
-                    # Strategy: shrink text -> strip text -> strip feedback -> give up
+                    # Strategy: drop text -> strip feedback -> give up
                     if text_chars > 0:
-                        text_chars = text_chars // 2
-                        if text_chars < 100:
-                            text_chars = 0
-                        print(f"  [Scorer] Context overflow, retrying with {text_chars} chars")
-                        user_prompt = format_user_prompt(item, text_chars)
+                        text_chars = 0
+                        print(f"  [Scorer] Context overflow, retrying without article text")
+                        user_prompt = format_user_prompt(item, 0)
                         continue
 
                     if not feedback_stripped and self._feedback_examples:

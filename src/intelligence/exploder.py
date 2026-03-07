@@ -420,12 +420,14 @@ class ListicleExploder:
         if not text:
             text = "[No article text available]"
 
+        text_chars = self._max_text_chars
+
         user_prompt = _EXTRACTION_USER_TEMPLATE.format(
             item_type=item_type,
             title=title,
             url=url,
             text=text,
-            max_text_chars=self._max_text_chars,
+            max_text_chars=text_chars,
         )
 
         # Pick the right system prompt
@@ -438,7 +440,38 @@ class ListicleExploder:
             system_prompt = _EXTRACTION_SYSTEM_PROMPT
 
         try:
-            raw_text, in_tok, out_tok = self._call_llm(system_prompt, user_prompt)
+            # Retry with progressively shorter text on context overflow
+            raw_text = None
+            in_tok = out_tok = 0
+            for _overflow_attempt in range(3):
+                try:
+                    raw_text, in_tok, out_tok = self._call_llm(system_prompt, user_prompt)
+                    break
+                except (openai.BadRequestError, anthropic.BadRequestError) as exc:
+                    err_str = str(exc)
+                    if "n_keep" in err_str or "n_ctx" in err_str or "context" in err_str.lower():
+                        text_chars = text_chars // 2
+                        if text_chars < 200:
+                            print(f"  [Exploder] Context overflow for '{title[:40]}', text too long for model")
+                            with self._lock:
+                                self._errors += 1
+                            return []
+                        trimmed = (scored_item.get("text") or "")[:text_chars]
+                        user_prompt = _EXTRACTION_USER_TEMPLATE.format(
+                            item_type=item_type,
+                            title=title,
+                            url=url,
+                            text=trimmed,
+                            max_text_chars=text_chars,
+                        )
+                        print(f"  [Exploder] Context overflow, retrying with {text_chars} chars")
+                        continue
+                    raise
+
+            if raw_text is None:
+                with self._lock:
+                    self._errors += 1
+                return []
 
             with self._lock:
                 self._total_input_tokens += in_tok

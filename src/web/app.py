@@ -57,6 +57,23 @@ def verdict_badge(verdict) -> rx.Component:
     )
 
 
+def skip_reason_badge(item: dict) -> rx.Component:
+    """Badge showing why an item was skipped (duplicate, rejected, error)."""
+    return rx.cond(
+        item["action"].to(str) == "skip",
+        rx.cond(
+            item["dedup_status"].to(str) == "duplicate",
+            rx.badge("Duplicate", color_scheme="orange", variant="surface", size="1"),
+            rx.cond(
+                item["verdict"].to(str) == "error",
+                rx.badge("Error", color_scheme="red", variant="surface", size="1"),
+                rx.badge("Rejected", color_scheme="red", variant="surface", size="1"),
+            ),
+        ),
+        rx.fragment(),
+    )
+
+
 def item_row(item: dict) -> rx.Component:
     """One row in the items table."""
     return rx.table.row(
@@ -69,6 +86,7 @@ def item_row(item: dict) -> rx.Component:
                     cursor="pointer",
                     _hover={"text_decoration": "underline"},
                 ),
+                skip_reason_badge(item),
                 rx.cond(
                     item["source_article"],
                     rx.badge(
@@ -310,6 +328,50 @@ def detail_dialog() -> rx.Component:
                     "From listicle: " + item["source_article"].to(str),
                     size="2",
                     color="gray",
+                    margin_bottom="12px",
+                ),
+                rx.fragment(),
+            ),
+
+            # Skip reason with dedup details
+            rx.cond(
+                item["action"].to(str) == "skip",
+                rx.box(
+                    rx.cond(
+                        item["dedup_status"].to(str) == "duplicate",
+                        rx.box(
+                            rx.hstack(
+                                rx.badge("Duplicate", color_scheme="orange", variant="solid", size="1"),
+                                rx.text("Already exists in Notion", size="2", color="orange"),
+                                align="center",
+                                spacing="2",
+                            ),
+                            rx.foreach(
+                                item["dedup_matches"],
+                                lambda match: rx.text(
+                                    match["name"].to(str) + " (" + match["database"].to(str) + ")",
+                                    size="2",
+                                    color="gray",
+                                    padding_left="8px",
+                                ),
+                            ),
+                        ),
+                        rx.hstack(
+                            rx.badge(
+                                rx.cond(
+                                    item["verdict"].to(str) == "error",
+                                    "Error",
+                                    "Rejected",
+                                ),
+                                color_scheme="red",
+                                variant="solid",
+                                size="1",
+                            ),
+                            rx.text("Skipped by scorer", size="2", color="red"),
+                            align="center",
+                            spacing="2",
+                        ),
+                    ),
                     margin_bottom="12px",
                 ),
                 rx.fragment(),
