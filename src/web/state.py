@@ -45,6 +45,7 @@ class DigestState(rx.State):
     # Detail dialog
     show_detail: bool = False
     detail_item: dict = {}
+    detail_dedup_matches: list[dict[str, str]] = []
 
     # Editable fields in detail dialog
     edit_name: str = ""
@@ -324,6 +325,10 @@ class DigestState(rx.State):
         if item is None:
             return
         self.detail_item = item
+        self.detail_dedup_matches = [
+            {"name": m.get("name", ""), "database": m.get("database", "")}
+            for m in (item.get("dedup_matches") or [])
+        ]
         self.edit_name = item.get("suggested_name") or ""
         self.edit_category = item.get("suggested_category") or ""
         self.edit_database = item.get("target_database") or ""
@@ -334,12 +339,14 @@ class DigestState(rx.State):
         """Close the detail dialog."""
         self.show_detail = False
         self.detail_item = {}
+        self.detail_dedup_matches = []
 
     def handle_dialog_open_change(self, is_open: bool) -> None:
         """Handle dialog open/close from the UI (e.g. clicking overlay)."""
         if not is_open:
             self.show_detail = False
             self.detail_item = {}
+            self.detail_dedup_matches = []
 
     def set_edit_name(self, value: str) -> None:
         """Update editable name field."""
