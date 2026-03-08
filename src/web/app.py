@@ -349,7 +349,7 @@ def detail_dialog() -> rx.Component:
                             rx.foreach(
                                 DigestState.detail_dedup_matches,
                                 lambda match: rx.text(
-                                    match["name"].to(str) + " (" + match["database"].to(str) + ")",
+                                    match.name + " (" + match.database + ")",
                                     size="2",
                                     color="gray",
                                     padding_left="8px",

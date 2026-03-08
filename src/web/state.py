@@ -27,6 +27,12 @@ def _get_store() -> DigestStore:
     return DigestStore()
 
 
+class DedupMatch(rx.Base):
+    """Typed model for dedup match entries (needed for rx.foreach)."""
+    name: str = ""
+    database: str = ""
+
+
 class DigestState(rx.State):
     """Top-level state: run selection, items list, detail dialog."""
 
@@ -45,7 +51,7 @@ class DigestState(rx.State):
     # Detail dialog
     show_detail: bool = False
     detail_item: dict = {}
-    detail_dedup_matches: list[dict[str, str]] = []
+    detail_dedup_matches: list[DedupMatch] = []
 
     # Editable fields in detail dialog
     edit_name: str = ""
@@ -326,7 +332,7 @@ class DigestState(rx.State):
             return
         self.detail_item = item
         self.detail_dedup_matches = [
-            {"name": m.get("name", ""), "database": m.get("database", "")}
+            DedupMatch(name=m.get("name", ""), database=m.get("database", ""))
             for m in (item.get("dedup_matches") or [])
         ]
         self.edit_name = item.get("suggested_name") or ""
