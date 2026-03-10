@@ -224,15 +224,8 @@ def rule_proposals_section() -> rx.Component:
 def model_selector() -> rx.Component:
     """Dropdown to select which LLM model to use for scoring."""
     return rx.hstack(
-        rx.select.root(
-            rx.select.trigger(placeholder="Auto-detect"),
-            rx.select.content(
-                rx.select.item("Auto-detect", value="auto"),
-                rx.foreach(
-                    DigestState.available_models,
-                    lambda m: rx.select.item(m, value=m),
-                ),
-            ),
+        rx.select(
+            DigestState.model_options,
             value=DigestState.selected_model,
             on_change=DigestState.set_selected_model,
             size="2",

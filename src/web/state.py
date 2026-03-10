@@ -67,6 +67,11 @@ class DigestState(rx.State):
     available_models: list[str] = []
     models_loading: bool = False
 
+    @rx.var(cache=True)
+    def model_options(self) -> list[str]:
+        """All model options including 'auto' for the selector."""
+        return ["auto"] + self.available_models
+
     # Pipeline trigger
     pipeline_running: bool = False
     pipeline_status: str = ""

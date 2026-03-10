@@ -73,7 +73,9 @@ _LISTICLE_NUMBER_RE = re.compile(
 
 def detect_listicle_from_title(item: dict) -> dict | None:
     """
-    Detect listicle articles from title patterns when the scorer missed it.
+    Detect listicle articles from title patterns when the scorer missed it,
+    or fix missing/invalid listicle_item_type when the scorer flagged is_listicle
+    but didn't provide a valid type.
 
     Looks for patterns like "N <adjective>? <keyword>" in the title, e.g.:
         "3 Python Libraries That Almost Replaced Entire Tools for Me"
@@ -83,7 +85,8 @@ def detect_listicle_from_title(item: dict) -> dict | None:
     Returns the same item dict with is_listicle/listicle_item_type set,
     or None if no listicle pattern was detected.
     """
-    if item.get("is_listicle"):
+    # Only skip if both is_listicle AND listicle_item_type are properly set
+    if item.get("is_listicle") and item.get("listicle_item_type") in EXPLODABLE_TYPES:
         return None
 
     if item.get("verdict") in ("reject", "error"):
@@ -591,16 +594,28 @@ class ListicleExploder:
             if cancel_check and cancel_check():
                 result.append(item)
                 continue
-            # Title-based heuristic: catch listicles the scorer missed
-            if not item.get("is_listicle"):
+            # Title-based heuristic: catch listicles the scorer missed,
+            # or fix missing/invalid listicle_item_type
+            if not item.get("is_listicle") or item.get("listicle_item_type") not in EXPLODABLE_TYPES:
+                was_listicle = item.get("is_listicle", False)
                 detected = detect_listicle_from_title(item)
                 if detected:
                     name = (item.get("suggested_name") or "?")[:50]
                     name = name.encode("ascii", errors="replace").decode("ascii")
                     itype = item.get("listicle_item_type", "?")
-                    print(f"  [heuristic] Title pattern detected listicle: {name} -> {itype}")
+                    if was_listicle:
+                        print(f"  [fix] Inferred listicle_item_type={itype} for: {name}")
+                    else:
+                        print(f"  [heuristic] Title pattern detected listicle: {name} -> {itype}")
                     with self._lock:
                         self._heuristic_detected += 1
+                elif was_listicle and item.get("item_type") in EXPLODABLE_TYPES:
+                    # Scorer flagged as listicle but title didn't match keywords;
+                    # fall back to the item's own item_type
+                    item["listicle_item_type"] = item["item_type"]
+                    name = (item.get("suggested_name") or "?")[:50]
+                    name = name.encode("ascii", errors="replace").decode("ascii")
+                    print(f"  [fix] Using item_type={item['item_type']} as listicle_item_type for: {name}")
 
             if self.should_explode(item):
                 name = (item.get("suggested_name") or "?")[:50]
