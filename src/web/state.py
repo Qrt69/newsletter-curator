@@ -103,14 +103,26 @@ class DigestState(rx.State):
         """Fetch available models from LM Studio /v1/models endpoint."""
         self.models_loading = True
         base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
+        # Strip trailing /v1 to build the correct endpoint URL
+        api_base = base_url.rstrip("/")
+        if api_base.endswith("/v1"):
+            models_url = f"{api_base}/models"
+        else:
+            models_url = f"{api_base}/v1/models"
         try:
-            resp = httpx.get(f"{base_url}/models", timeout=5)
+            resp = httpx.get(models_url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
             models = [m["id"] for m in data.get("data", []) if m.get("id")]
             self.available_models = sorted(models)
-        except Exception:
+            if not models:
+                self.pipeline_status = f"LM Studio has no models loaded ({models_url})"
+        except httpx.ConnectError:
             self.available_models = []
+            self.pipeline_status = f"Cannot reach LM Studio at {models_url}"
+        except Exception as exc:
+            self.available_models = []
+            self.pipeline_status = f"Model fetch failed: {exc}"
         self.models_loading = False
 
     def set_selected_model(self, value: str) -> None:
@@ -167,13 +179,21 @@ class DigestState(rx.State):
             self._force_stopped = False
             model = self.selected_model
 
+        thread_error: list[str] = []  # mutable container to capture errors from thread
+
         def _run_in_thread(model_name: str):
             import sys
+            import traceback
             from pathlib import Path
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-            from scripts.run_weekly import run_pipeline
-            m = None if model_name == "auto" else model_name or None
-            asyncio.run(run_pipeline(model=m))
+            try:
+                from scripts.run_weekly import run_pipeline
+                m = None if model_name == "auto" else model_name or None
+                asyncio.run(run_pipeline(model=m))
+            except Exception as exc:
+                tb = traceback.format_exc()
+                thread_error.append(f"{exc}")
+                print(f"\n*** PIPELINE ERROR ***\n{tb}")
 
         t = threading.Thread(target=_run_in_thread, args=(model,), daemon=True)
         t.start()
@@ -192,6 +212,10 @@ class DigestState(rx.State):
             if self._force_stopped:
                 # Force stop already set status; just reload runs
                 self._force_stopped = False
+                self._reload_runs()
+            elif thread_error:
+                self.pipeline_running = False
+                self.pipeline_status = f"ERROR: {thread_error[0]}"
                 self._reload_runs()
             else:
                 self.pipeline_running = False

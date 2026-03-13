@@ -491,7 +491,16 @@ def index() -> rx.Component:
                         rx.text(
                             DigestState.pipeline_status,
                             size="2",
-                            color="gray",
+                            color=rx.cond(
+                                DigestState.pipeline_status.contains("ERROR"),
+                                "red",
+                                "gray",
+                            ),
+                            weight=rx.cond(
+                                DigestState.pipeline_status.contains("ERROR"),
+                                "bold",
+                                "regular",
+                            ),
                         ),
                         rx.fragment(),
                     ),

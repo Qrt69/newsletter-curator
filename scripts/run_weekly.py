@@ -41,6 +41,7 @@ from src.notion.dedup import DedupIndex
 from src.notion.writer import NotionWriter
 from src.storage.digest import DigestStore
 
+import logging
 import os
 import time
 
@@ -48,6 +49,9 @@ DATA_DIR = os.environ.get("DATA_DIR", ".")
 DB_PATH = os.path.join(DATA_DIR, "digest.db")
 LOCK_FILE = os.path.join(DATA_DIR, ".pipeline_running")
 PROGRESS_FILE = os.path.join(DATA_DIR, ".pipeline_progress")
+LOG_FILE = os.path.join(DATA_DIR, "pipeline.log")
+
+logger = logging.getLogger("pipeline")
 CANCEL_FILE = os.path.join(DATA_DIR, ".pipeline_cancel")
 LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
 
@@ -134,8 +138,20 @@ def _release_lock(token: str | None = None):
         pass
 
 
+def _setup_logging():
+    """Configure file logging so pipeline output is always captured."""
+    handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        logger.addHandler(handler)
+
+
 async def run_pipeline(model: str | None = None):
     """Run the full ingest pipeline once."""
+    _setup_logging()
     token = _acquire_lock()
     if token is None:
         print("Pipeline is already running. Skipping.")
@@ -148,6 +164,10 @@ async def run_pipeline(model: str | None = None):
     except PipelineCancelled:
         _write_progress("Force stopped -- no emails moved")
         print("\n*** Pipeline force-stopped. No emails were moved to 'Processed'. ***")
+        logger.warning("Pipeline force-stopped by user")
+    except Exception:
+        logger.exception("Pipeline failed with unhandled exception")
+        raise
     finally:
         _clear_progress()
         _clear_cancel()
@@ -156,6 +176,7 @@ async def run_pipeline(model: str | None = None):
 
 async def _run_pipeline_inner(model: str | None = None):
     """Inner pipeline logic (called with lock held)."""
+    logger.info("Pipeline run started (model=%s)", model or "auto")
     print("=" * 60)
     print("Newsletter Curator - Pipeline Run")
     print("=" * 60)
@@ -167,11 +188,13 @@ async def _run_pipeline_inner(model: str | None = None):
     print("\n[1/5] Fetching emails...")
     fetcher = EmailFetcher()
     emails = await fetcher.fetch_emails()
+    logger.info("Fetched %d emails", len(emails))
     print(f"  Fetched {len(emails)} emails from 'To qualify'")
 
     if not emails:
         _write_progress("No emails to process")
         print("  No emails to process. Done.")
+        logger.info("No emails to process, exiting")
         return
 
     _write_progress(f"Fetched {len(emails)} emails, preparing...")
@@ -229,6 +252,7 @@ async def _run_pipeline_inner(model: str | None = None):
             }
         all_items.extend(items)
     extractor.close()
+    logger.info("Extracted %d items from %d emails", len(all_items), len(emails))
     print(f"  Extracted {len(all_items)} items total")
 
     if not all_items:
@@ -236,6 +260,7 @@ async def _run_pipeline_inner(model: str | None = None):
             "items_extracted": 0, "items_scored": 0,
             "items_proposed": 0, "items_skipped": 0, "status": "completed",
         })
+        logger.warning("No items extracted from %d emails — pipeline finished early", len(emails))
         print("  No items extracted. Done.")
         return
 
@@ -255,6 +280,7 @@ async def _run_pipeline_inner(model: str | None = None):
         print("  No feedback overrides to inject")
 
     max_text = int(os.environ.get("SCORER_MAX_TEXT_CHARS", "3000"))
+    logger.info("Initializing scorer (backend=%s, model=%s)", os.environ.get("SCORER_BACKEND", "local"), model or "auto")
     scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
     if model:
         print(f"  Using model: {model}")
@@ -266,6 +292,7 @@ async def _run_pipeline_inner(model: str | None = None):
         scored = scorer.score_batch(all_items, on_progress=_scoring_progress, cancel_check=_is_cancelled)
     except ConnectionError as exc:
         _write_progress(f"ERROR: {exc}")
+        logger.error("Scoring aborted — LLM connection error: %s", exc)
         print(f"\n  *** SCORING ABORTED: {exc}")
         print("  Fix the LLM connection and re-run. Emails stay in 'To qualify'.")
         store.finish_run(run_id, {
@@ -347,6 +374,9 @@ async def _run_pipeline_inner(model: str | None = None):
         "status": "completed",
     })
 
+    logger.info("Run %d complete: proposed=%d, skipped=%d, review=%d",
+                run_id, summary["by_action"].get("propose", 0),
+                summary["by_action"].get("skip", 0), summary["by_action"].get("review", 0))
     print(f"\n  Run {run_id} complete!")
     print(f"  Proposed: {summary['by_action'].get('propose', 0)}")
     print(f"  Skipped:  {summary['by_action'].get('skip', 0)}")
