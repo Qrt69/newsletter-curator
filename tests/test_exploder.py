@@ -61,9 +61,9 @@ def test_should_explode():
     item = {"is_listicle": True, "listicle_item_type": "article", "verdict": "strong_fit"}
     assert not ex.should_explode(item), "article type should not explode"
 
-    # Negative: reject verdict
+    # Positive: rejected listicles ARE still exploded (sub-items get own scores)
     item = {"is_listicle": True, "listicle_item_type": "python_library", "verdict": "reject"}
-    assert not ex.should_explode(item), "Rejected listicle should not explode"
+    assert ex.should_explode(item), "Rejected listicle should still explode"
 
     # Negative: error verdict
     item = {"is_listicle": True, "listicle_item_type": "ai_tool", "verdict": "error"}
@@ -508,18 +508,30 @@ def test_detect_listicle_skips_already_flagged():
 
 # ── Test 14: Title heuristic skips rejects ───────────────────
 
-def test_detect_listicle_skips_rejects():
-    """TEST 14: Title heuristic skips rejected items."""
+def test_detect_listicle_skips_errors_not_rejects():
+    """TEST 14: Title heuristic skips error items but allows rejected items."""
     from src.intelligence.exploder import detect_listicle_from_title
 
-    item = {
+    # Error items should be skipped
+    item_error = {
         "suggested_name": "10 Python Libraries for HR Management",
+        "verdict": "error",
+        "is_listicle": False,
+        "listicle_item_type": None,
+    }
+    assert detect_listicle_from_title(item_error) is None, "Should skip error items"
+
+    # Rejected items should NOT be skipped — they can still be exploded
+    item_reject = {
+        "suggested_name": "10 Python Libraries for Data Science",
         "verdict": "reject",
         "is_listicle": False,
         "listicle_item_type": None,
     }
-    result = detect_listicle_from_title(item)
-    assert result is None, "Should skip rejected items"
+    result = detect_listicle_from_title(item_reject)
+    assert result is not None, "Should detect listicle even if rejected"
+    assert result["is_listicle"] is True
+    assert result["listicle_item_type"] == "python_library"
 
 
 # ── Test 15: process_batch preserves parent ──────────────────

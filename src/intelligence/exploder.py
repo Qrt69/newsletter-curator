@@ -89,7 +89,7 @@ def detect_listicle_from_title(item: dict) -> dict | None:
     if item.get("is_listicle") and item.get("listicle_item_type") in EXPLODABLE_TYPES:
         return None
 
-    if item.get("verdict") in ("reject", "error"):
+    if item.get("verdict") == "error":
         return None
 
     candidates = [
@@ -400,11 +400,16 @@ class ListicleExploder:
     # -- Public methods --
 
     def should_explode(self, scored_item: dict) -> bool:
-        """Check if a scored item is an explodable listicle."""
+        """Check if a scored item is an explodable listicle.
+
+        Rejected listicles are still exploded — the individual sub-items
+        get their own scores and dedup checks.  Only error items (API
+        failures) are skipped.
+        """
         return (
             scored_item.get("is_listicle", False)
             and scored_item.get("listicle_item_type") in EXPLODABLE_TYPES
-            and scored_item.get("verdict") not in ("reject", "error")
+            and scored_item.get("verdict") != "error"
         )
 
     def explode_item(self, scored_item: dict) -> list[dict]:
@@ -562,6 +567,15 @@ class ListicleExploder:
                     else:
                         filtered.append(sub)
                 sub_items = filtered
+
+            # Python libraries that survived dedup are not in Notion yet —
+            # treat them as strong_fit (score floor 5) since the user considers
+            # discovering new Python libraries high-value.
+            if item_type == "python_library":
+                for sub in sub_items:
+                    if sub["score"] < 5:
+                        sub["score"] = 5
+                        sub["verdict"] = "strong_fit"
 
             with self._lock:
                 self._items_exploded += 1

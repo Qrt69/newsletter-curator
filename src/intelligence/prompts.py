@@ -67,11 +67,18 @@ interest areas and multiple quality signals. List each applied signal in the "si
 array with its point value. The score field must equal the sum of all signal points.
 
 """ + INTEREST_PROFILE_BLOCK + """
-#### Listicle-specific quality signals
+#### Listicle-specific scoring rules
+IMPORTANT: Listicle articles listing multiple tools, libraries, or products are CONTAINERS \
+that will be exploded into individual sub-items. Do NOT reject a listicle just because it's \
+shallow or lacks depth — the individual items inside are what matters. Score listicles of \
+Python libraries, AI tools, coding tools, or other notable items at MINIMUM 1 (maybe) so \
+they proceed to the explosion step. Only reject a listicle if NONE of the listed items could \
+possibly match the interest profile.
+
 | Factor | Points |
 |--------|--------|
-| Shallow listicle (no depth, just a list of names) | -1 |
-| Listicle of individually notable tools/libraries (will be exploded into sub-items) | 0 |
+| Listicle of individually notable tools/libraries (will be exploded into sub-items) | +1 |
+| Listicle where NONE of the items match the interest profile | -3 |
 
 ### Item types (pick the best match)
 - python_library: A Python package or library
