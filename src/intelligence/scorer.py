@@ -412,7 +412,7 @@ class Scorer:
             raise json.JSONDecodeError("repair_json did not produce a dict", text, 0)
 
         # Ensure score is int
-        score = int(data.get("score", 0))
+        score = int(data.get("score") or 0)
 
         # Always derive verdict from score to prevent contradictions
         if score >= 5:

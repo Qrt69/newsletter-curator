@@ -505,7 +505,7 @@ class ListicleExploder:
                     print(f"    [hallucination] Dropping '{raw_name}' -- not found in article text")
                     continue
 
-                score = int(raw.get("score", 0))
+                score = int(raw.get("score") or 0)
 
                 # Derive verdict from score (same as Scorer)
                 if score >= 5:
