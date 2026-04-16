@@ -107,8 +107,8 @@ class DigestState(rx.State):
             return f"{api_base}/models"
         return f"{api_base}/v1/models"
 
-    def fetch_models(self, quiet: bool = False) -> None:
-        """Fetch available models from LM Studio /v1/models endpoint.
+    def _fetch_models_impl(self, quiet: bool = False) -> None:
+        """Fetch available models from LM Studio (internal implementation).
 
         Args:
             quiet: If True, don't set pipeline_status on failure (used for
@@ -138,6 +138,10 @@ class DigestState(rx.State):
             if not quiet:
                 self.pipeline_status = f"Model fetch failed: {exc}"
         self.models_loading = False
+
+    def fetch_models(self) -> None:
+        """Fetch models (used by on_click — no args allowed by Reflex)."""
+        self._fetch_models_impl(quiet=False)
 
     def set_selected_model(self, value: str) -> None:
         """Set the selected model for the next pipeline run."""
@@ -251,7 +255,7 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
-        self.fetch_models(quiet=True)  # Don't show errors on page load
+        self._fetch_models_impl(quiet=True)  # Don't show errors on page load
         store = _get_store()
         # Silent cleanup of old rejected/skipped items on page load
         store.cleanup_old_items()
