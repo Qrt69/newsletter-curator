@@ -107,8 +107,13 @@ class DigestState(rx.State):
             return f"{api_base}/models"
         return f"{api_base}/v1/models"
 
-    def fetch_models(self) -> None:
-        """Fetch available models from LM Studio /v1/models endpoint."""
+    def fetch_models(self, quiet: bool = False) -> None:
+        """Fetch available models from LM Studio /v1/models endpoint.
+
+        Args:
+            quiet: If True, don't set pipeline_status on failure (used for
+                   page-load where failure is expected when tunnel is down).
+        """
         self.models_loading = True
         models_url = self._build_models_url()
         try:
@@ -119,17 +124,19 @@ class DigestState(rx.State):
             # Filter out embedding models (not usable for scoring)
             models = [m for m in models if "embed" not in m.lower()]
             self.available_models = sorted(models)
-            if not models:
+            if not quiet and not models:
                 self.pipeline_status = "LM Studio running but no chat models loaded"
             elif self.pipeline_status and "LM Studio" in self.pipeline_status:
                 # Clear stale LM Studio error now that models loaded OK
                 self.pipeline_status = ""
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
             self.available_models = []
-            self.pipeline_status = "Cannot reach LM Studio -- is it running?"
+            if not quiet:
+                self.pipeline_status = "Cannot reach LM Studio -- is it running?"
         except Exception as exc:
             self.available_models = []
-            self.pipeline_status = f"Model fetch failed: {exc}"
+            if not quiet:
+                self.pipeline_status = f"Model fetch failed: {exc}"
         self.models_loading = False
 
     def set_selected_model(self, value: str) -> None:
@@ -244,7 +251,7 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
-        self.fetch_models()
+        self.fetch_models(quiet=True)  # Don't show errors on page load
         store = _get_store()
         # Silent cleanup of old rejected/skipped items on page load
         store.cleanup_old_items()
