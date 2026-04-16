@@ -256,6 +256,7 @@ async def _run_pipeline_inner(model: str | None = None):
     print(f"  Extracted {len(all_items)} items total")
 
     if not all_items:
+        _write_progress("No items extracted from emails")
         store.finish_run(run_id, {
             "items_extracted": 0, "items_scored": 0,
             "items_proposed": 0, "items_skipped": 0, "status": "completed",
@@ -281,14 +282,14 @@ async def _run_pipeline_inner(model: str | None = None):
 
     max_text = int(os.environ.get("SCORER_MAX_TEXT_CHARS", "3000"))
     logger.info("Initializing scorer (backend=%s, model=%s)", os.environ.get("SCORER_BACKEND", "local"), model or "auto")
-    scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
-    if model:
-        print(f"  Using model: {model}")
 
     def _scoring_progress(i: int, total: int):
         _write_progress(f"Scoring ({i}/{total} items)")
 
     try:
+        _write_progress("Connecting to LLM...")
+        scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
+        print(f"  Using model: {scorer.stats()['model']}")
         scored = scorer.score_batch(all_items, on_progress=_scoring_progress, cancel_check=_is_cancelled)
     except ConnectionError as exc:
         _write_progress(f"ERROR: {exc}")
@@ -323,7 +324,9 @@ async def _run_pipeline_inner(model: str | None = None):
 
     # 3c. Explode listicles
     from src.intelligence.exploder import ListicleExploder
-    exploder = ListicleExploder(notion_client=nc, dedup_index=dedup)
+    _write_progress("Exploding listicles...")
+    detected_model = scorer.stats()["model"]
+    exploder = ListicleExploder(notion_client=nc, dedup_index=dedup, model=detected_model)
     pre_count = len(scored)
     scored = exploder.process_batch(scored, cancel_check=_is_cancelled)
     if len(scored) != pre_count:

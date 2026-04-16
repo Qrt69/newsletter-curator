@@ -224,22 +224,27 @@ def rule_proposals_section() -> rx.Component:
 def model_selector() -> rx.Component:
     """Dropdown to select which LLM model to use for scoring."""
     return rx.hstack(
-        rx.select(
-            DigestState.model_options,
+        rx.select.root(
+            rx.select.trigger(placeholder="Select model..."),
+            rx.select.content(
+                rx.foreach(
+                    DigestState.model_options,
+                    lambda m: rx.select.item(m, value=m),
+                ),
+            ),
             value=DigestState.selected_model,
             on_change=DigestState.set_selected_model,
-            size="2",
         ),
         rx.button(
             rx.cond(
                 DigestState.models_loading,
                 rx.spinner(size="1"),
-                rx.text("R", size="1"),
+                rx.icon("refresh-cw", size=14),
             ),
             size="1",
             variant="ghost",
             on_click=DigestState.fetch_models,
-            title="Refresh models",
+            title="Refresh models from LM Studio",
         ),
         align="center",
         spacing="1",

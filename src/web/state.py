@@ -99,27 +99,34 @@ class DigestState(rx.State):
         except OSError:
             return ""
 
+    def _build_models_url(self) -> str:
+        """Build the LM Studio /v1/models URL from config."""
+        base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
+        api_base = base_url.rstrip("/")
+        if api_base.endswith("/v1"):
+            return f"{api_base}/models"
+        return f"{api_base}/v1/models"
+
     def fetch_models(self) -> None:
         """Fetch available models from LM Studio /v1/models endpoint."""
         self.models_loading = True
-        base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
-        # Strip trailing /v1 to build the correct endpoint URL
-        api_base = base_url.rstrip("/")
-        if api_base.endswith("/v1"):
-            models_url = f"{api_base}/models"
-        else:
-            models_url = f"{api_base}/v1/models"
+        models_url = self._build_models_url()
         try:
             resp = httpx.get(models_url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
             models = [m["id"] for m in data.get("data", []) if m.get("id")]
+            # Filter out embedding models (not usable for scoring)
+            models = [m for m in models if "embed" not in m.lower()]
             self.available_models = sorted(models)
             if not models:
-                self.pipeline_status = f"LM Studio has no models loaded ({models_url})"
+                self.pipeline_status = "LM Studio running but no chat models loaded"
+            elif self.pipeline_status and "LM Studio" in self.pipeline_status:
+                # Clear stale LM Studio error now that models loaded OK
+                self.pipeline_status = ""
         except httpx.ConnectError:
             self.available_models = []
-            self.pipeline_status = f"Cannot reach LM Studio at {models_url}"
+            self.pipeline_status = "Cannot reach LM Studio -- is it running?"
         except Exception as exc:
             self.available_models = []
             self.pipeline_status = f"Model fetch failed: {exc}"
@@ -174,8 +181,16 @@ class DigestState(rx.State):
                 self.pipeline_running = True
                 return
 
+            # Pre-flight: verify LM Studio is reachable before starting
+            if os.environ.get("SCORER_BACKEND", "local") == "local":
+                self.pipeline_status = "Checking LM Studio..."
+                self.fetch_models()
+                if not self.available_models:
+                    self.pipeline_status = "Cannot start: LM Studio not reachable or no models loaded"
+                    return
+
             self.pipeline_running = True
-            self.pipeline_status = "Running..."
+            self.pipeline_status = "Starting pipeline..."
             self._force_stopped = False
             model = self.selected_model
 

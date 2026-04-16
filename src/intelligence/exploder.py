@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Callable
 
 import anthropic
+import httpx as _httpx
 import openai
 from json_repair import repair_json
 
@@ -257,7 +258,11 @@ class ListicleExploder:
         else:
             base_url = os.environ.get("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL)
             llm_key = api_key or os.environ.get("LLM_API_KEY", _DEFAULT_LLM_API_KEY)
-            self._openai_client = openai.OpenAI(base_url=base_url, api_key=llm_key)
+            self._openai_client = openai.OpenAI(
+                base_url=base_url,
+                api_key=llm_key,
+                timeout=_httpx.Timeout(120.0, connect=5.0),
+            )
             self._anthropic_client = None
             self._model = model or os.environ.get("LLM_MODEL", "")
             if not self._model:
@@ -281,7 +286,7 @@ class ListicleExploder:
     def _auto_detect_model(self) -> str:
         """Query the local server for available models and pick the first one."""
         try:
-            models = self._openai_client.models.list()
+            models = self._openai_client.models.list(timeout=5.0)
             if models.data:
                 model_id = models.data[0].id
                 print(f"  [Exploder] Auto-detected local model: {model_id}")
