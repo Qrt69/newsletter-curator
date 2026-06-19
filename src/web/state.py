@@ -252,6 +252,44 @@ class DigestState(rx.State):
                     self.selected_run_id = self.runs[0]["id"]
                     self._load_items()
 
+    @rx.event(background=True)
+    async def resume_progress_if_running(self):
+        """Re-attach the live progress display to an already-running pipeline.
+
+        The progress poll in trigger_pipeline() is bound to the browser session
+        that launched the run. After a disconnect (e.g. the PC sleeps) or a plain
+        page refresh, that loop is gone, so the live "Scoring (x/y items)" status
+        would not reappear even though the run is still going on the server. On
+        page load, if the lock file shows a run in progress, resume polling the
+        progress file so the status (and how far along it is) comes back.
+        """
+        async with self:
+            if not self._check_lock_file():
+                return
+            self.pipeline_running = True
+            progress = self._read_progress_file()
+            if progress:
+                self.pipeline_status = progress
+
+        # Poll every 3 seconds until the run finishes (lock file removed)
+        while True:
+            await asyncio.sleep(3)
+            async with self:
+                if not self._check_lock_file():
+                    break
+                progress = self._read_progress_file()
+                if progress:
+                    self.pipeline_status = progress
+
+        async with self:
+            self.pipeline_running = False
+            self.pipeline_status = "Complete!"
+            self._reload_runs()
+            # Auto-select the newest run so results appear without a manual refresh
+            if self.runs:
+                self.selected_run_id = self.runs[0]["id"]
+                self._load_items()
+
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()

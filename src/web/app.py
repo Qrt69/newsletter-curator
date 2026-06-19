@@ -476,7 +476,7 @@ def detail_dialog() -> rx.Component:
 # ── Main page ────────────────────────────────────────────────
 
 
-@rx.page(route="/", on_load=DigestState.load_runs)
+@rx.page(route="/", on_load=[DigestState.load_runs, DigestState.resume_progress_if_running])
 def index() -> rx.Component:
     """Main review page."""
     return rx.box(
