@@ -1,6 +1,9 @@
 services:
   web:
     build: .
+    # Chromium (Playwright) needs more than Docker's default 64MB /dev/shm or it
+    # crashes ("double free or corruption"), which hangs content extraction.
+    shm_size: 1gb
     ports:
       - "8080:8080"
     env_file: .env
@@ -15,6 +18,8 @@ services:
 
   scheduler:
     build: .
+    # See web service: Chromium needs a larger /dev/shm to avoid crashing.
+    shm_size: 1gb
     command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
     env_file: .env
     environment:
