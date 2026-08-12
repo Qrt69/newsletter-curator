@@ -5,7 +5,10 @@ services:
     # crashes ("double free or corruption"), which hangs content extraction.
     shm_size: 1gb
     ports:
-      - "8080:8080"
+      # Bind to loopback only: the app is reached through the host's Caddy
+      # (newsletter-curator.higeja.tech). Publishing on 0.0.0.0 exposed the
+      # unauthenticated /api/* endpoints directly on the public IP.
+      - "127.0.0.1:8080:8080"
     env_file: .env
     environment:
       - DATA_DIR=/data
@@ -17,6 +20,11 @@ services:
     restart: unless-stopped
 
   scheduler:
+    # Disabled by default: the weekly Sunday 18:00 UTC run only works when the
+    # laptop is on with LM Studio reachable, and a successful run silently moves
+    # emails to "Processed" without review. Start it explicitly when wanted:
+    #   docker compose --profile scheduler up -d
+    profiles: ["scheduler"]
     build: .
     # See web service: Chromium needs a larger /dev/shm to avoid crashing.
     shm_size: 1gb
