@@ -20,7 +20,6 @@ Usage:
 import argparse
 import asyncio
 import sys
-import uuid
 from pathlib import Path
 
 # Ensure project root is on sys.path for imports
@@ -40,20 +39,21 @@ from src.notion.client import NotionClient
 from src.notion.dedup import DedupIndex
 from src.notion.writer import NotionWriter
 from src.storage.digest import DigestStore
+from src.storage import lock
 
 import logging
 import os
-import time
 
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 DB_PATH = os.path.join(DATA_DIR, "digest.db")
-LOCK_FILE = os.path.join(DATA_DIR, ".pipeline_running")
 PROGRESS_FILE = os.path.join(DATA_DIR, ".pipeline_progress")
 LOG_FILE = os.path.join(DATA_DIR, "pipeline.log")
 
 logger = logging.getLogger("pipeline")
-CANCEL_FILE = os.path.join(DATA_DIR, ".pipeline_cancel")
-LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
+
+# Token of the run executing in this process, so cancel signals addressed to an
+# earlier run cannot stop it (and vice versa).
+_run_token: str | None = None
 
 
 class PipelineCancelled(Exception):
@@ -62,16 +62,8 @@ class PipelineCancelled(Exception):
 
 
 def _is_cancelled() -> bool:
-    """Check if the cancel file exists (set by force-stop)."""
-    return os.path.exists(CANCEL_FILE)
-
-
-def _clear_cancel():
-    """Remove the cancel file."""
-    try:
-        os.remove(CANCEL_FILE)
-    except OSError:
-        pass
+    """Check whether a force-stop was requested for *this* run."""
+    return lock.is_cancelled(_run_token)
 
 
 def _check_cancel():
@@ -87,53 +79,15 @@ def _write_progress(msg: str):
             f.write(msg)
     except OSError:
         pass
+    # Doubles as the lock heartbeat: a run in another container proves it is
+    # alive by keeping the lock file's mtime fresh.
+    lock.heartbeat(_run_token)
 
 
 def _clear_progress():
     """Remove the progress file."""
     try:
         os.remove(PROGRESS_FILE)
-    except OSError:
-        pass
-
-
-def is_pipeline_locked() -> bool:
-    """Check if the pipeline lock file exists and is not stale."""
-    if not os.path.exists(LOCK_FILE):
-        return False
-    try:
-        age = time.time() - os.path.getmtime(LOCK_FILE)
-        if age > LOCK_STALE_SECONDS:
-            print(f"  Stale lock file detected ({age:.0f}s old), removing.")
-            os.remove(LOCK_FILE)
-            return False
-    except OSError:
-        return False
-    return True
-
-
-def _acquire_lock() -> str | None:
-    """Create the lock file with a unique token. Returns the token, or None if already locked."""
-    if is_pipeline_locked():
-        return None
-    token = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    try:
-        with open(LOCK_FILE, "w") as f:
-            f.write(token)
-        return token
-    except OSError:
-        return None
-
-
-def _release_lock(token: str | None = None):
-    """Remove the lock file. If token is given, only remove if it matches (prevents race condition)."""
-    try:
-        if token is not None:
-            with open(LOCK_FILE, "r") as f:
-                current = f.read().strip()
-            if current != token:
-                return  # Lock belongs to a different run; don't remove
-        os.remove(LOCK_FILE)
     except OSError:
         pass
 
@@ -151,13 +105,17 @@ def _setup_logging():
 
 async def run_pipeline(model: str | None = None):
     """Run the full ingest pipeline once."""
+    global _run_token
     _setup_logging()
-    token = _acquire_lock()
+    token = lock.acquire()
     if token is None:
         print("Pipeline is already running. Skipping.")
         return
 
-    _clear_cancel()  # Clear any stale cancel from previous run
+    # No blanket clear of the cancel file here: that is how a newly started run
+    # used to wipe the stop signal of the run it had stacked on top of. acquire()
+    # discards a signal addressed to an earlier, finished run.
+    _run_token = token
 
     try:
         await _run_pipeline_inner(model=model)
@@ -170,12 +128,32 @@ async def run_pipeline(model: str | None = None):
         raise
     finally:
         _clear_progress()
-        _clear_cancel()
-        _release_lock(token)
+        lock.clear_cancel(token)
+        lock.release(token)
+        _run_token = None
 
 
 async def _run_pipeline_inner(model: str | None = None):
-    """Inner pipeline logic (called with lock held)."""
+    """
+    Inner pipeline logic (called with lock held).
+
+    Anything holding an HTTP connection pool registers itself in `closers`, so
+    early returns and exceptions cannot skip the cleanup. The LLM clients used
+    to be left open, once per run, for the life of the web process.
+    """
+    closers: list = []
+    try:
+        await _run_pipeline_steps(model, closers)
+    finally:
+        for closer in closers:
+            try:
+                closer.close()
+            except Exception:
+                logger.exception("Failed to close %s", type(closer).__name__)
+
+
+async def _run_pipeline_steps(model: str | None, closers: list):
+    """The pipeline steps themselves."""
     logger.info("Pipeline run started (model=%s)", model or "auto")
     print("=" * 60)
     print("Newsletter Curator - Pipeline Run")
@@ -296,6 +274,7 @@ async def _run_pipeline_inner(model: str | None = None):
     try:
         _write_progress("Connecting to LLM...")
         scorer = Scorer(feedback_examples=feedback_examples, max_text_chars=max_text, model=model)
+        closers.append(scorer)
         print(f"  Using model: {scorer.stats()['model']}")
         scored = scorer.score_batch(all_items, on_progress=_scoring_progress, cancel_check=_is_cancelled)
     except ConnectionError as exc:
@@ -334,6 +313,7 @@ async def _run_pipeline_inner(model: str | None = None):
     _write_progress("Exploding listicles...")
     detected_model = scorer.stats()["model"]
     exploder = ListicleExploder(notion_client=nc, dedup_index=dedup, model=detected_model)
+    closers.append(exploder)
     pre_count = len(scored)
     scored = exploder.process_batch(scored, cancel_check=_is_cancelled)
     if len(scored) != pre_count:

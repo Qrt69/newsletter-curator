@@ -14,6 +14,7 @@ import httpx
 import reflex as rx
 
 from ..storage.digest import DigestStore
+from ..storage import lock
 from ..intelligence.router import ROUTING_TABLE
 from ..intelligence.feedback import FeedbackProcessor
 
@@ -83,10 +84,8 @@ class DigestState(rx.State):
     accepted_count: int = 0
 
     def _check_lock_file(self) -> bool:
-        """Check if the pipeline lock file exists."""
-        data_dir = os.environ.get("DATA_DIR", ".")
-        lock_path = os.path.join(data_dir, ".pipeline_running")
-        return os.path.exists(lock_path)
+        """Check whether a pipeline run is in progress (see src/storage/lock.py)."""
+        return lock.is_locked()
 
     @staticmethod
     def _read_progress_file() -> str:
@@ -148,11 +147,13 @@ class DigestState(rx.State):
         self.selected_model = value
 
     def check_pipeline_status(self) -> None:
-        """Check if pipeline is still running (via lock file)."""
+        """Check if pipeline is still running (via the shared lock)."""
         was_running = self.pipeline_running
         self.pipeline_running = self._check_lock_file()
         if was_running and not self.pipeline_running:
-            self.pipeline_status = "Complete!"
+            # A force-stopped run also ends here; don't report it as completed.
+            self.pipeline_status = "Force stopped" if self._force_stopped else "Complete!"
+            self._force_stopped = False
             self._reload_runs()
 
     def _reload_runs(self) -> None:
@@ -164,23 +165,19 @@ class DigestState(rx.State):
             self._load_items()
 
     def force_stop_pipeline(self) -> None:
-        """Force-stop the pipeline by signalling cancellation and removing the lock file."""
-        data_dir = os.environ.get("DATA_DIR", ".")
-        # Signal cancellation first — pipeline checks this before each LLM call
-        cancel_path = os.path.join(data_dir, ".pipeline_cancel")
-        try:
-            with open(cancel_path, "w") as f:
-                f.write("cancel")
-        except OSError:
-            pass
-        # Then remove the lock file
-        lock_path = os.path.join(data_dir, ".pipeline_running")
-        try:
-            os.remove(lock_path)
-        except OSError:
-            pass
-        self.pipeline_running = False
-        self.pipeline_status = "Force stopped"
+        """
+        Ask the running pipeline to stop.
+
+        Only signals; the run releases its own lock once it has wound down. The
+        old version deleted the lock file here, which freed the button while the
+        old thread kept going — so a second run could start on top of the first,
+        and both kept extracting and scoring.
+        """
+        if not lock.request_cancel():
+            self.pipeline_running = False
+            self.pipeline_status = "No run to stop"
+            return
+        self.pipeline_status = "Stopping — waiting for the current step to finish..."
         self._force_stopped = True
 
     @rx.event(background=True)
@@ -224,20 +221,22 @@ class DigestState(rx.State):
         t = threading.Thread(target=_run_in_thread, args=(model,), daemon=True)
         t.start()
 
-        # Poll every 3 seconds until pipeline finishes or force-stopped
+        # Poll every 3 seconds until the run really ends. A force stop no longer
+        # breaks out early: the thread is still winding down, and pretending it
+        # is finished is what allowed two runs to overlap.
         while t.is_alive():
             async with self:
-                if self._force_stopped:
-                    break
-                progress = self._read_progress_file()
-                if progress:
-                    self.pipeline_status = progress
+                if not self._force_stopped:
+                    progress = self._read_progress_file()
+                    if progress:
+                        self.pipeline_status = progress
             await asyncio.sleep(3)
 
         async with self:
             if self._force_stopped:
-                # Force stop already set status; just reload runs
                 self._force_stopped = False
+                self.pipeline_running = False
+                self.pipeline_status = "Force stopped"
                 self._reload_runs()
             elif thread_error:
                 self.pipeline_running = False
@@ -283,7 +282,11 @@ class DigestState(rx.State):
 
         async with self:
             self.pipeline_running = False
-            self.pipeline_status = "Complete!"
+            if self._force_stopped:
+                self._force_stopped = False
+                self.pipeline_status = "Force stopped"
+            else:
+                self.pipeline_status = "Complete!"
             self._reload_runs()
             # Auto-select the newest run so results appear without a manual refresh
             if self.runs:

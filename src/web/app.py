@@ -16,6 +16,7 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 
 from .state import DigestState, DATABASE_OPTIONS
+from ..storage import lock
 
 
 # ── Helper components ────────────────────────────────────────
@@ -654,22 +655,11 @@ def index() -> rx.Component:
 # ── API endpoints for curl access ────────────────────────────
 
 _DATA_DIR = os.environ.get("DATA_DIR", ".")
-_LOCK_FILE = os.path.join(_DATA_DIR, ".pipeline_running")
-_LOCK_STALE_SECONDS = 30 * 60
 
 
 def _is_locked() -> bool:
-    """Check if the pipeline lock file exists and is not stale."""
-    if not os.path.exists(_LOCK_FILE):
-        return False
-    import time
-    try:
-        age = time.time() - os.path.getmtime(_LOCK_FILE)
-        if age > _LOCK_STALE_SECONDS:
-            return False
-    except OSError:
-        return False
-    return True
+    """Check whether a pipeline run is in progress (see src/storage/lock.py)."""
+    return lock.is_locked()
 
 
 def _start_pipeline_thread(model: str | None = None):
@@ -729,18 +719,16 @@ async def _api_write_notion(request):
 
 
 async def _api_pipeline_force_stop(request):
-    """Force-stop the pipeline by signalling cancellation and removing the lock file."""
-    cancel_path = os.path.join(_DATA_DIR, ".pipeline_cancel")
-    try:
-        with open(cancel_path, "w") as f:
-            f.write("cancel")
-    except OSError:
-        pass
-    try:
-        os.remove(_LOCK_FILE)
-    except OSError:
-        pass
-    return JSONResponse({"status": "stopped"})
+    """
+    Ask the running pipeline to stop.
+
+    Signals only — the run releases its own lock when it has wound down. Both
+    this endpoint and the UI button used to delete the lock file, which freed
+    the way for a second run while the first was still going.
+    """
+    if not lock.request_cancel():
+        return JSONResponse({"status": "not_running"})
+    return JSONResponse({"status": "stopping"})
 
 
 async def _api_cleanup(request):

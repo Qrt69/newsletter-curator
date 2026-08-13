@@ -9,6 +9,7 @@ Set SCORER_BACKEND env var to choose (default: "local").
 """
 
 import json
+import logging
 import os
 import re
 import threading
@@ -21,6 +22,9 @@ import openai
 from json_repair import repair_json
 
 from .prompts import SCORER_SYSTEM_PROMPT, format_user_prompt
+
+# Child of the "pipeline" logger, so messages land in the pipeline log file.
+logger = logging.getLogger("pipeline.scorer")
 
 # Valid values for structured fields
 _VALID_VERDICTS = {"strong_fit", "likely_fit", "maybe", "reject"}
@@ -379,6 +383,22 @@ class Scorer:
             results = list(pool.map(_score_one, enumerate(items, 1)))
 
         return results
+
+    def close(self):
+        """
+        Release the HTTP connection pool held by the LLM client.
+
+        Scoring a run opens a connection per worker and keeps it warm; without
+        this the pool (and its buffers) stayed alive for the life of the web
+        process, once per run.
+        """
+        for client in (self._openai_client, self._anthropic_client):
+            if client is None:
+                continue
+            try:
+                client.close()
+            except Exception:
+                logger.exception("Failed to close LLM client")
 
     def stats(self) -> dict:
         """Return token usage and scoring statistics."""

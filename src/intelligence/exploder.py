@@ -13,6 +13,7 @@ Set SCORER_BACKEND env var to choose (default: "local").
 """
 
 import json
+import logging
 import os
 import re
 import threading
@@ -25,6 +26,9 @@ import openai
 from json_repair import repair_json
 
 from src.intelligence.prompts import INTEREST_PROFILE_BLOCK
+
+# Child of the "pipeline" logger, so messages land in the pipeline log file.
+logger = logging.getLogger("pipeline.exploder")
 
 
 # Item types that can be exploded into individual database entries
@@ -660,6 +664,16 @@ class ListicleExploder:
             else:
                 result.append(item)
         return result
+
+    def close(self):
+        """Release the HTTP connection pool held by the LLM client."""
+        for client in (self._openai_client, self._anthropic_client):
+            if client is None:
+                continue
+            try:
+                client.close()
+            except Exception:
+                logger.exception("Failed to close LLM client")
 
     def stats(self) -> dict:
         """Return token usage and explosion statistics."""
