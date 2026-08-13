@@ -11,7 +11,11 @@ services:
     # Backstop against runaway browser/pipeline leaks taking down the whole VPS
     # (a leak once reached 3000+ PIDs / 9.5 GB). On breach the container is
     # OOM-killed and restarted instead of the host swapping to death.
-    mem_limit: 3g
+    # 6g, not 3g: the app idles at ~1.9GB of anonymous memory (Reflex starts 18
+    # granian workers), so 3g left too little headroom for Chromium plus scoring
+    # and would have OOM-killed a normal run. The VPS has 16GB; a runaway leak
+    # once reached 9.5GB, so this still catches one.
+    mem_limit: 6g
     pids_limit: 512
     ports:
       # Bind to loopback only: the app is reached through the host's Caddy
@@ -38,7 +42,11 @@ services:
     # See web service for the reasoning behind these four.
     shm_size: 1gb
     init: true
-    mem_limit: 3g
+    # 6g, not 3g: the app idles at ~1.9GB of anonymous memory (Reflex starts 18
+    # granian workers), so 3g left too little headroom for Chromium plus scoring
+    # and would have OOM-killed a normal run. The VPS has 16GB; a runaway leak
+    # once reached 9.5GB, so this still catches one.
+    mem_limit: 6g
     pids_limit: 512
     command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
     env_file: .env
