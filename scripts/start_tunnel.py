@@ -74,6 +74,20 @@ def _setup_logging(log_file: Path):
     logger.addHandler(stream)
 
 
+def _no_window() -> dict:
+    """
+    Keyword args that keep a child process from flashing a console window.
+
+    Under the scheduled task the supervisor runs as pythonw, which has no
+    console of its own — so Windows hands every console child (ssh, powershell)
+    a brand new window. Without this, each health check blinked a window on the
+    user's desktop.
+    """
+    if os.name != "nt":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
 def ssh_binary() -> str:
     """Path to the ssh that can see the agent holding our key."""
     if os.name == "nt" and Path(_WIN_SSH).exists():
@@ -115,7 +129,7 @@ def _run_remote(script: str, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run a shell snippet on the VPS over its own short-lived ssh connection."""
     return subprocess.run(
         [ssh_binary(), *_ssh_opts(), SSH_HOST, script],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, timeout=timeout, **_no_window(),
     )
 
 
@@ -181,12 +195,12 @@ def kill_stale_local_tunnels():
             )
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=30, **_no_window(),
             ).stdout
             pids = [int(p) for p in out.split() if p.strip().isdigit()]
             for pid in pids:
                 subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                               capture_output=True, timeout=15)
+                               capture_output=True, timeout=15, **_no_window())
                 logger.info("Killed stale local tunnel process %d", pid)
         else:
             subprocess.run(["pkill", "-f", f"ssh.*{spec}"], capture_output=True, timeout=15)
@@ -197,10 +211,9 @@ def kill_stale_local_tunnels():
 def _start_tunnel_process() -> subprocess.Popen:
     cmd = build_ssh_command()
     logger.info("Starting tunnel: VPS:%d -> %s:%d", REMOTE_PORT, LOCAL_HOST, LOCAL_PORT)
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, creationflags=creationflags,
+        text=True, **_no_window(),
     )
 
 
