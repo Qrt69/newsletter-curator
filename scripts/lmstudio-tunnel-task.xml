@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>kurt</Author>
+    <Description>Keeps the SSH reverse tunnel to the VPS up (LM Studio 127.0.0.1:1234 -> VPS 127.0.0.1:22236), so the newsletter-curator containers can reach the local LLM. Register with: Register-ScheduledTask -TaskName "LMStudio SSH Tunnel" -Xml (Get-Content scripts\lmstudio-tunnel-task.xml -Raw)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <!-- After every logon, so a reboot restores the tunnel. -->
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>azuread\kurtfarasyn</UserId>
+    </LogonTrigger>
+    <!-- On resume from sleep: the supervisor's keepalives would notice within a
+         minute anyway, but this makes the recovery immediate. -->
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="System"&gt;&lt;Select Path="System"&gt;*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+    <!-- Safety net every 5 minutes: if the supervisor itself ever dies, this
+         starts it again. Harmless while it runs (MultipleInstances=IgnoreNew). -->
+    <CalendarTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2026-08-13T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <Duration>P1D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>azuread\kurtfarasyn</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+    <WakeToRun>false</WakeToRun>
+    <!-- No time limit: this is a supervisor, it is meant to run forever. -->
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <!-- pythonw: no console window. Logs go to
+           %LOCALAPPDATA%\newsletter-curator\tunnel.log -->
+      <Command>C:\Dev\newsletter-curator\.venv\Scripts\pythonw.exe</Command>
+      <Arguments>scripts\start_tunnel.py</Arguments>
+      <WorkingDirectory>C:\Dev\newsletter-curator</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
