@@ -211,13 +211,16 @@ async def _run_pipeline_inner(model: str | None = None):
         from src.email.extractor import ContentExtractor as _CE
         _scanner = _CE()
         has_browser_links = False
-        for email in emails:
-            for link in _scanner.parse_links(email["body_html"]):
-                if needs_browser(link["url"]):
-                    has_browser_links = True
+        try:
+            for email in emails:
+                for link in _scanner.parse_links(email["body_html"]):
+                    if needs_browser(link["url"]):
+                        has_browser_links = True
+                        break
+                if has_browser_links:
                     break
-            if has_browser_links:
-                break
+        finally:
+            _scanner.close()
 
         if has_browser_links:
             _write_progress("Checking browser session...")
@@ -237,21 +240,25 @@ async def _run_pipeline_inner(model: str | None = None):
     print("\n[2/5] Extracting content...")
     extractor = ContentExtractor(browser_fetcher=browser_fetcher)
     all_items = []
-    for i, email in enumerate(emails, 1):
-        _check_cancel()
-        subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
-        _write_progress(f"Extracting content ({i}/{len(emails)} emails)")
-        print(f"  [{i}/{len(emails)}] {subject}")
-        items = extractor.extract_from_email(email["body_html"])
-        # Tag items with email metadata
-        for item in items:
-            item["_email_meta"] = {
-                "email_id": email["id"],
-                "email_subject": email["subject"],
-                "email_sender": email.get("sender_name") or email["sender"],
-            }
-        all_items.extend(items)
-    extractor.close()
+    # finally, not a trailing close(): cancellation and extraction errors used to
+    # skip the close entirely, leaking the browser for the life of the container.
+    try:
+        for i, email in enumerate(emails, 1):
+            _check_cancel()
+            subject = email["subject"][:50].encode("ascii", errors="replace").decode("ascii")
+            _write_progress(f"Extracting content ({i}/{len(emails)} emails)")
+            print(f"  [{i}/{len(emails)}] {subject}")
+            items = extractor.extract_from_email(email["body_html"])
+            # Tag items with email metadata
+            for item in items:
+                item["_email_meta"] = {
+                    "email_id": email["id"],
+                    "email_subject": email["subject"],
+                    "email_sender": email.get("sender_name") or email["sender"],
+                }
+            all_items.extend(items)
+    finally:
+        extractor.close()
     logger.info("Extracted %d items from %d emails", len(all_items), len(emails))
     print(f"  Extracted {len(all_items)} items total")
 

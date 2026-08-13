@@ -6,6 +6,7 @@ redirects, and extracts article text via trafilatura.
 """
 
 import concurrent.futures
+import logging
 import re
 import threading
 from urllib.parse import urlparse
@@ -15,6 +16,9 @@ import trafilatura
 from bs4 import BeautifulSoup
 
 from .browser import needs_browser
+
+# Child of the "pipeline" logger, so messages land in the pipeline log file.
+logger = logging.getLogger("pipeline.extractor")
 
 # Patterns in URLs that indicate boilerplate (not article links)
 _SKIP_URL_PATTERNS = re.compile(
@@ -709,9 +713,15 @@ class ContentExtractor:
 
     def close(self):
         """Close the httpx client session and browser if active."""
-        self._client.close()
+        try:
+            self._client.close()
+        except Exception:
+            logger.exception("Failed to close httpx client")
         if self._browser:
             try:
                 self._browser.close()
             except Exception:
-                pass  # Playwright greenlet may be on a dead thread
+                # Must never pass silently: swallowing this here is what let a
+                # whole Chromium tree leak on every run.
+                logger.exception("Failed to close browser fetcher")
+                print("  [extractor] Browser close failed (see pipeline log)")

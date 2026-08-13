@@ -12,13 +12,20 @@ Storage state file (.browser_state.json) bridges async login and sync fetching.
 """
 
 import asyncio
+import concurrent.futures
+import logging
 import os
 import re
+import signal
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+
+# Child of the "pipeline" logger, so messages land in the pipeline log file.
+logger = logging.getLogger("pipeline.browser")
 
 # Domains that need browser-based fetching
 BROWSER_DOMAINS = {"medium.com", "beehiiv.com"}
@@ -52,6 +59,41 @@ _CONTEXT_OPTIONS = {
 }
 
 
+def _descendant_pids(root: int) -> set[int]:
+    """
+    PIDs descending from `root`, read straight from /proc (Linux only).
+
+    Used to remember which processes a Chromium launch spawned, so they can be
+    killed if the graceful close ever fails. Returns an empty set off Linux.
+    """
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return set()
+
+    children: dict[int, list[int]] = {}
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+            # Format: "pid (comm) state ppid ..." — comm may contain spaces and
+            # parens, so split after the *last* closing paren.
+            fields = stat[stat.rindex(")") + 2:].split()
+            ppid = int(fields[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(entry.name))
+
+    found: set[int] = set()
+    stack = [root]
+    while stack:
+        for pid in children.get(stack.pop(), []):
+            if pid not in found:
+                found.add(pid)
+                stack.append(pid)
+    return found
+
+
 def needs_browser(url: str) -> bool:
     """Check if a URL belongs to a domain that needs browser-based fetching."""
     try:
@@ -72,6 +114,14 @@ class BrowserFetcher:
     Used as a fallback by ContentExtractor when httpx gets blocked (403).
     Lazy-launches Chromium only when actually needed.
 
+    Every Playwright call runs on one dedicated, long-lived owner thread.
+    Playwright's sync API is thread-affine: whichever thread started the driver
+    must also use and close it. Callers arrive from the extractor's per-email
+    ThreadPoolExecutor, whose threads die when that pool is torn down after each
+    email — so launching there and closing from the main thread raised
+    "cannot switch to a different thread (which happens to have exited)" and
+    leaked a whole Chromium tree per run.
+
     Usage:
         fetcher = BrowserFetcher()
         html, error = fetcher.fetch_page("https://medium.com/...")
@@ -82,11 +132,44 @@ class BrowserFetcher:
         self._state_path = state_path or _default_state_path()
         self._playwright = None
         self._browser = None
+        self._owner: concurrent.futures.ThreadPoolExecutor | None = None
+        self._owner_lock = threading.Lock()
+        self._closed = False
+        # Processes spawned by the launch, killed only if close() fails.
+        self._child_pids: list[int] = []
+
+    # ── Owner thread ──────────────────────────────────────────────
+
+    def _run(self, fn, *args):
+        """Run a Playwright call on the owner thread and return its result."""
+        with self._owner_lock:
+            if self._closed:
+                raise RuntimeError("BrowserFetcher is closed")
+            if self._owner is None:
+                self._owner = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="playwright-owner",
+                )
+            owner = self._owner
+        return owner.submit(fn, *args).result()
+
+    def _kill_tracked_pids(self):
+        """Backstop for a failed close: SIGKILL the processes we spawned."""
+        sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+        for pid in self._child_pids:
+            try:
+                os.kill(pid, sig)
+                logger.warning("[browser] killed leaked process %d", pid)
+            except OSError:
+                pass  # Already gone, or not ours to kill
+        self._child_pids = []
+
+    # ── Playwright (owner thread only) ────────────────────────────
 
     def _ensure_browser(self):
         """Launch Playwright + Chromium on first use with stealth args."""
         if self._browser:
             return
+        before = _descendant_pids(os.getpid())
         try:
             from playwright.sync_api import sync_playwright
             self._playwright = sync_playwright().start()
@@ -95,9 +178,16 @@ class BrowserFetcher:
             )
         except Exception as exc:
             print(f"  [browser] Failed to launch Playwright: {exc}")
+            logger.exception("[browser] Playwright launch failed")
             self._playwright = None
             self._browser = None
             raise
+        self._child_pids = sorted(_descendant_pids(os.getpid()) - before)
+        logger.info(
+            "[browser] launched on thread '%s' (pids: %s)",
+            threading.current_thread().name,
+            self._child_pids or "unknown",
+        )
 
     def _new_context(self):
         """Create a new browser context with stealth settings and stored session."""
@@ -107,17 +197,9 @@ class BrowserFetcher:
             opts["storage_state"] = self._state_path
         return self._browser.new_context(**opts)
 
-    def fetch_page(
+    def _fetch_page(
         self, url: str, retries: int = 2, retry_delay: float = 5.0,
     ) -> tuple[str, str | None]:
-        """
-        Fetch a page using Playwright and return rendered HTML.
-
-        Retries on 5xx server errors (common with Medium transient failures).
-
-        Returns:
-            Tuple of (html_content, error_or_none)
-        """
         try:
             self._ensure_browser()
         except Exception as exc:
@@ -156,13 +238,7 @@ class BrowserFetcher:
 
         return "", f"browser_fetch_failed: {last_error}"
 
-    def resolve_url(self, url: str) -> tuple[str, str | None]:
-        """
-        Navigate to a URL and return the final URL after all redirects.
-
-        Returns:
-            Tuple of (final_url, error_or_none)
-        """
+    def _resolve_url(self, url: str) -> tuple[str, str | None]:
         try:
             self._ensure_browser()
         except Exception as exc:
@@ -180,14 +256,72 @@ class BrowserFetcher:
             if context:
                 context.close()
 
-    def close(self):
-        """Close browser and Playwright."""
+    def _close(self):
+        """Close browser and Playwright (owner thread)."""
         if self._browser:
             self._browser.close()
             self._browser = None
         if self._playwright:
             self._playwright.stop()
             self._playwright = None
+
+    # ── Public API (any thread) ───────────────────────────────────
+
+    def fetch_page(
+        self, url: str, retries: int = 2, retry_delay: float = 5.0,
+    ) -> tuple[str, str | None]:
+        """
+        Fetch a page using Playwright and return rendered HTML.
+
+        Retries on 5xx server errors (common with Medium transient failures).
+
+        Returns:
+            Tuple of (html_content, error_or_none)
+        """
+        try:
+            return self._run(self._fetch_page, url, retries, retry_delay)
+        except RuntimeError as exc:
+            return "", f"browser_unavailable: {exc}"
+
+    def resolve_url(self, url: str) -> tuple[str, str | None]:
+        """
+        Navigate to a URL and return the final URL after all redirects.
+
+        Returns:
+            Tuple of (final_url, error_or_none)
+        """
+        try:
+            return self._run(self._resolve_url, url)
+        except RuntimeError as exc:
+            return url, f"browser_unavailable: {exc}"
+
+    def close(self):
+        """
+        Close browser and Playwright, then retire the owner thread.
+
+        The close itself runs on the owner thread — the only thread allowed to
+        touch the driver. If it still fails or hangs, the processes recorded at
+        launch are killed so nothing survives the run.
+        """
+        with self._owner_lock:
+            if self._closed:
+                return
+            self._closed = True
+            owner, self._owner = self._owner, None
+
+        if owner is None:
+            return  # Browser was never launched
+
+        try:
+            owner.submit(self._close).result(timeout=60)
+        except Exception:
+            logger.exception("[browser] close failed; killing browser processes")
+            print("  [browser] close failed, killing browser processes")
+            self._kill_tracked_pids()
+        else:
+            self._child_pids = []
+        finally:
+            owner.shutdown(wait=False)
 
 
 class BrowserSession:

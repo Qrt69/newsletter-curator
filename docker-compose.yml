@@ -4,6 +4,15 @@ services:
     # Chromium (Playwright) needs more than Docker's default 64MB /dev/shm or it
     # crashes ("double free or corruption"), which hangs content extraction.
     shm_size: 1gb
+    # PID 1 is "uv run reflex run", which does not reap children: killed or
+    # crashed Chromium processes left permanent <defunct> slots behind. tini
+    # reaps them.
+    init: true
+    # Backstop against runaway browser/pipeline leaks taking down the whole VPS
+    # (a leak once reached 3000+ PIDs / 9.5 GB). On breach the container is
+    # OOM-killed and restarted instead of the host swapping to death.
+    mem_limit: 3g
+    pids_limit: 512
     ports:
       # Bind to loopback only: the app is reached through the host's Caddy
       # (newsletter-curator.higeja.tech). Publishing on 0.0.0.0 exposed the
@@ -26,8 +35,11 @@ services:
     #   docker compose --profile scheduler up -d
     profiles: ["scheduler"]
     build: .
-    # See web service: Chromium needs a larger /dev/shm to avoid crashing.
+    # See web service for the reasoning behind these four.
     shm_size: 1gb
+    init: true
+    mem_limit: 3g
+    pids_limit: 512
     command: ["uv", "run", "python", "scripts/run_weekly.py", "--schedule"]
     env_file: .env
     environment:
