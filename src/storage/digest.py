@@ -516,6 +516,25 @@ class DigestStore:
             "feedback_entries": feedback_count,
         }
 
+    # ── Lifecycle ───────────────────────────────────────────────
+
+    def close(self) -> None:
+        """Close the SQLite connection. Safe to call twice.
+
+        A run used to create a store and drop it without closing, so the web
+        worker that ran the pipeline accumulated a connection per run (13 open
+        digest.db handles after run 283, against 5 in a worker that never ran
+        one). Each one holds its own page cache for the life of the process.
+        """
+        self._conn.close()  # sqlite3 allows this twice; using the store after
+                            # it raises ProgrammingError, which is the point
+
+    def __enter__(self) -> "DigestStore":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
     # ── Internal ────────────────────────────────────────────────
 
     @staticmethod
