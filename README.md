@@ -96,6 +96,23 @@ Docker Compose on Hetzner VPS with Caddy reverse proxy:
 docker compose up -d --build
 ```
 
+### Weekly restart (host cron, not in a container)
+
+Each pipeline run leaves ~435MB of anonymous memory behind in the granian
+worker that ran it, which reaches `mem_limit: 6g` in under two weeks at a run a
+day. `scripts/nc-weekly-restart.sh` is the safety net: it restarts the web
+container every Sunday at 03:30 local time, unless a run is in progress. It
+lives on the host, so a rebuilt machine needs it installed again:
+
+```bash
+install -D -m 755 scripts/nc-weekly-restart.sh /home/kurt/bin/nc-weekly-restart.sh
+{ crontab -l 2>/dev/null; echo '30 3 * * 0 /home/kurt/bin/nc-weekly-restart.sh'; } | crontab -
+```
+
+No sudo: the `kurt` user is in the `docker` group. Decisions land in
+`/home/kurt/nc-weekly-restart.log`; check it after a Sunday to see whether the
+restart happened or was skipped for a running pipeline.
+
 ## Routing Table
 
 | Item Type | Notion Database |
