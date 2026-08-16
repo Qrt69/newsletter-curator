@@ -28,12 +28,6 @@ services:
       - SCORER_BACKEND=local
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
       - SKIP_BROWSER_LOGIN=1
-      # No MALLOC_ARENA_MAX here on purpose. Capping glibc's arenas at 2 was
-      # tried against the ~435MB a run leaves behind, but the lock contention
-      # across extraction's 8 threads and dedup's 6 cost more speed than the
-      # reclaimed memory was worth. The growth is bounded instead by starting
-      # every run in a freshly restarted container -- see
-      # scripts/nc-start-run.sh.
     volumes:
       - app-data:/data
     restart: unless-stopped

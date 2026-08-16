@@ -19,8 +19,6 @@ Usage:
 
 import argparse
 import asyncio
-import ctypes
-import gc
 import sys
 from pathlib import Path
 
@@ -135,46 +133,6 @@ async def run_pipeline(model: str | None = None):
         _run_token = None
 
 
-def _rss_kb() -> int | None:
-    """Resident set size of this process in kB, or None off Linux."""
-    try:
-        with open("/proc/self/status") as fh:
-            for line in fh:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1])
-    except OSError:
-        pass
-    return None
-
-
-def _trim_heap() -> None:
-    """Hand freed memory back to the OS and log how much that recovered.
-
-    Kept for the number it prints, not for the memory it saves. A run now has
-    its own process (src/web/runner.py), so everything it allocated goes back
-    to the kernel a moment after this line is logged either way — when the
-    pipeline ran as a thread in the web process it did not, and 40MB out of
-    ~225MB was all this could recover.
-
-    The line stays because it is the cheapest signal we have about the shape of
-    a run's memory: RSS at the end of a run, and how much of it Python had
-    already freed but the allocator was still sitting on.
-    """
-    before = _rss_kb()
-    gc.collect()
-    trimmed = None
-    try:
-        trimmed = bool(ctypes.CDLL("libc.so.6").malloc_trim(0))
-    except (OSError, AttributeError) as exc:
-        logger.info("malloc_trim unavailable (%s) — collected garbage only", exc)
-    after = _rss_kb()
-    if before is not None and after is not None:
-        logger.info(
-            "Heap trim: RSS %d MB -> %d MB (recovered %d MB, malloc_trim=%s)",
-            before // 1024, after // 1024, (before - after) // 1024, trimmed,
-        )
-
-
 async def _run_pipeline_inner(model: str | None = None):
     """
     Inner pipeline logic (called with lock held).
@@ -192,7 +150,6 @@ async def _run_pipeline_inner(model: str | None = None):
                 closer.close()
             except Exception:
                 logger.exception("Failed to close %s", type(closer).__name__)
-        _trim_heap()
 
 
 async def _run_pipeline_steps(model: str | None, closers: list):
@@ -203,7 +160,6 @@ async def _run_pipeline_steps(model: str | None, closers: list):
     print("=" * 60)
 
     store = DigestStore(DB_PATH)
-    closers.append(store)  # its SQLite connection outlived the run otherwise
 
     # 1. Fetch emails
     _write_progress("Fetching emails...")
@@ -451,13 +407,10 @@ def write_accepted(run_id: int) -> dict:
     print(f"Writing accepted items for run {run_id}...")
     nc = NotionClient()
     store = DigestStore(DB_PATH)
-    try:
-        dedup = DedupIndex(nc)
-        dedup.load()  # Cache is fine here — relations are non-destructive
-        writer = NotionWriter(nc, store, dedup_index=dedup)
-        result = writer.write_batch(run_id)
-    finally:
-        store.close()
+    dedup = DedupIndex(nc)
+    dedup.load()  # Cache is fine here — relations are non-destructive
+    writer = NotionWriter(nc, store, dedup_index=dedup)
+    result = writer.write_batch(run_id)
     print(f"  Created: {result['created']}")
     print(f"  Updated: {result['updated']}")
     print(f"  Failed:  {result['failed']}")
@@ -509,8 +462,6 @@ def main():
                         help="Write accepted items for a run to Notion")
     parser.add_argument("--browser-login", action="store_true",
                         help="Open browser for manual Medium login (saves session)")
-    parser.add_argument("--model", metavar="NAME",
-                        help="Scoring model to use (default: auto-detect)")
     args = parser.parse_args()
 
     if args.browser_login:
@@ -521,8 +472,7 @@ def main():
     elif args.schedule:
         start_scheduler()
     else:
-        model = None if args.model in (None, "", "auto") else args.model
-        asyncio.run(run_pipeline(model=model))
+        asyncio.run(run_pipeline())
 
 
 if __name__ == "__main__":

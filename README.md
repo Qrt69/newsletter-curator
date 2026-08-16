@@ -96,38 +96,6 @@ Docker Compose on Hetzner VPS with Caddy reverse proxy:
 docker compose up -d --build
 ```
 
-### Memory: every run gets its own process
-
-A pipeline run leaves ~435MB of anonymous memory behind. While the run was a
-thread inside the web process that was ~435MB the granian worker never gave
-back, reaching `mem_limit: 6g` in under two weeks at a run a day. A
-`gc.collect()` plus `malloc_trim(0)` at the end of a run recovered 40MB of it,
-and capping glibc's arenas cost more in speed than it gave back in memory.
-
-So the cause was never settled, and no longer has to be: a run happens in a
-child process now (`src/web/runner.py`), which hands its whole address space
-back to the kernel when it exits. Both the "Run Pipeline" button and
-`GET /api/pipeline/trigger` go through it, so every run starts and ends clean.
-The lock, cancel signal, progress display and log were already files under
-`DATA_DIR`, so they cross the process boundary unchanged.
-
-`scripts/nc-start-run.sh` additionally recycles the whole web container before
-triggering a run -- belt-and-braces now rather than the fix itself. Its restart
-is at the *start* of a run, never after: the review UI has to stay up
-afterwards, because that is where proposals are judged before they go to Notion.
-It lives on the host, so a rebuilt machine needs it installed again:
-
-```bash
-install -D -m 755 scripts/nc-start-run.sh /home/kurt/bin/nc-start-run.sh
-/home/kurt/bin/nc-start-run.sh                      # model=auto
-/home/kurt/bin/nc-start-run.sh qwen2.5-14b-instruct
-```
-
-No sudo: the `kurt` user is in the `docker` group. It refuses to restart while
-a run is in progress, so it can never cost a run in flight. Deliberately not on
-cron: a run needs the PC on with LM Studio reachable, and it moves emails to
-"Processed" when it succeeds. Decisions land in `/home/kurt/nc-start-run.log`.
-
 ## Routing Table
 
 | Item Type | Notion Database |
