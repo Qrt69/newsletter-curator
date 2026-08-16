@@ -96,22 +96,30 @@ Docker Compose on Hetzner VPS with Caddy reverse proxy:
 docker compose up -d --build
 ```
 
-### Weekly restart (host cron, not in a container)
+### Starting a run (host script, not in a container)
 
 Each pipeline run leaves ~435MB of anonymous memory behind in the granian
 worker that ran it, which reaches `mem_limit: 6g` in under two weeks at a run a
-day. `scripts/nc-weekly-restart.sh` is the safety net: it restarts the web
-container every Sunday at 03:30 local time, unless a run is in progress. It
-lives on the host, so a rebuilt machine needs it installed again:
+day. Instead of chasing the cause, every run starts from a clean process:
+`scripts/nc-start-run.sh` restarts the web container, waits until the app
+answers again, and only then triggers the run over the local API.
+
+The restart is at the *start* of a run rather than after it, because the review
+UI has to stay up afterwards -- that is where proposals are judged before they
+go to Notion. Use this script instead of the "Run Pipeline" button; the button
+starts the pipeline inside the process that still carries the previous run's
+heap. It lives on the host, so a rebuilt machine needs it installed again:
 
 ```bash
-install -D -m 755 scripts/nc-weekly-restart.sh /home/kurt/bin/nc-weekly-restart.sh
-{ crontab -l 2>/dev/null; echo '30 3 * * 0 /home/kurt/bin/nc-weekly-restart.sh'; } | crontab -
+install -D -m 755 scripts/nc-start-run.sh /home/kurt/bin/nc-start-run.sh
+/home/kurt/bin/nc-start-run.sh                      # model=auto
+/home/kurt/bin/nc-start-run.sh qwen2.5-14b-instruct
 ```
 
-No sudo: the `kurt` user is in the `docker` group. Decisions land in
-`/home/kurt/nc-weekly-restart.log`; check it after a Sunday to see whether the
-restart happened or was skipped for a running pipeline.
+No sudo: the `kurt` user is in the `docker` group. It refuses to restart while
+a run is in progress, so it can never cost a run in flight. Deliberately not on
+cron: a run needs the PC on with LM Studio reachable, and it moves emails to
+"Processed" when it succeeds. Decisions land in `/home/kurt/nc-start-run.log`.
 
 ## Routing Table
 

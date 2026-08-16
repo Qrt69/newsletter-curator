@@ -28,14 +28,12 @@ services:
       - SCORER_BACKEND=local
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
       - SKIP_BROWSER_LOGIN=1
-      # Each pipeline run leaves ~435MB of anonymous memory behind in the
-      # granian worker that ran it, which at a run a day reaches mem_limit in
-      # under two weeks. glibc hands every allocating thread its own arena
-      # (extraction uses 8, dedup 6) and never gives one back; capping the
-      # arena count trades a little lock contention for memory that can
-      # actually be reclaimed. Measured together with the "Heap trim" line
-      # pipeline.log writes at the end of every run.
-      - MALLOC_ARENA_MAX=2
+      # No MALLOC_ARENA_MAX here on purpose. Capping glibc's arenas at 2 was
+      # tried against the ~435MB a run leaves behind, but the lock contention
+      # across extraction's 8 threads and dedup's 6 cost more speed than the
+      # reclaimed memory was worth. The growth is bounded instead by starting
+      # every run in a freshly restarted container -- see
+      # scripts/nc-start-run.sh.
     volumes:
       - app-data:/data
     restart: unless-stopped
@@ -63,7 +61,6 @@ services:
       - SCORER_BACKEND=local
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
       - SKIP_BROWSER_LOGIN=1
-      - MALLOC_ARENA_MAX=2  # see web service
     volumes:
       - app-data:/data
     restart: unless-stopped
