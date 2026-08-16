@@ -2,18 +2,18 @@
 # Start a pipeline run in a freshly restarted container. Runs on the VPS, not
 # inside a container.
 #
-# Every pipeline run leaves ~435MB of anonymous memory behind in the granian
-# worker that ran it, so without intervention the container walks into its
-# 6g mem_limit and gets OOM-killed mid-run. Rather than hunt the cause, every
-# run simply starts from a clean process: restart first, then trigger.
+# A pipeline run leaves ~435MB of anonymous memory behind, so a container that
+# accumulated it walked into its 6g mem_limit and got OOM-killed mid-run. The
+# actual fix is in the app: a run gets its own process (src/web/runner.py), so
+# it hands that memory back to the kernel when it exits, whether the cause was
+# a leak or the allocator holding on. The "Run Pipeline" button is safe.
+#
+# This script recycles the whole container on top of that, for when you want a
+# run to start from a genuinely fresh app -- belt-and-braces, not the fix.
 #
 # The restart happens at the *start* of a run, not after it: the review UI has
 # to stay up afterwards, because the proposals are judged there and only then
 # written to Notion. During the first hour of a run the UI is not needed.
-#
-# Use this instead of the "Run Pipeline" button in the UI -- the button starts
-# the pipeline inside the web process that is already carrying the previous
-# run's heap, which is exactly what this avoids.
 #
 # Not on cron on purpose: a run only works when the PC is on with LM Studio
 # reachable through the tunnel, and a successful run moves emails to

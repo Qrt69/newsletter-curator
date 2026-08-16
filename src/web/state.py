@@ -7,12 +7,12 @@ Event handlers load data from SQLite, handle accept/reject/edit.
 
 import asyncio
 import os
-import threading
 import time
 
 import httpx
 import reflex as rx
 
+from . import runner
 from ..storage.digest import DigestStore
 from ..storage import lock
 from ..intelligence.router import ROUTING_TABLE
@@ -202,29 +202,21 @@ class DigestState(rx.State):
             self._force_stopped = False
             model = self.selected_model
 
-        thread_error: list[str] = []  # mutable container to capture errors from thread
-
-        def _run_in_thread(model_name: str):
-            import sys
-            import traceback
-            from pathlib import Path
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-            try:
-                from scripts.run_weekly import run_pipeline
-                m = None if model_name == "auto" else model_name or None
-                asyncio.run(run_pipeline(model=m))
-            except Exception as exc:
-                tb = traceback.format_exc()
-                thread_error.append(f"{exc}")
-                print(f"\n*** PIPELINE ERROR ***\n{tb}")
-
-        t = threading.Thread(target=_run_in_thread, args=(model,), daemon=True)
-        t.start()
+        # The run gets its own process, so the ~435MB it leaves behind is
+        # handed back to the kernel when it exits instead of accumulating in
+        # this granian worker. See src/web/runner.py.
+        try:
+            proc = runner.start(model)
+        except Exception as exc:
+            async with self:
+                self.pipeline_running = False
+                self.pipeline_status = f"ERROR: could not start pipeline: {exc}"
+            return
 
         # Poll every 3 seconds until the run really ends. A force stop no longer
-        # breaks out early: the thread is still winding down, and pretending it
+        # breaks out early: the run is still winding down, and pretending it
         # is finished is what allowed two runs to overlap.
-        while t.is_alive():
+        while proc.poll() is None:
             async with self:
                 if not self._force_stopped:
                     progress = self._read_progress_file()
@@ -238,9 +230,9 @@ class DigestState(rx.State):
                 self.pipeline_running = False
                 self.pipeline_status = "Force stopped"
                 self._reload_runs()
-            elif thread_error:
+            elif proc.returncode != 0:
                 self.pipeline_running = False
-                self.pipeline_status = f"ERROR: {thread_error[0]}"
+                self.pipeline_status = f"ERROR: {runner.error_tail() or f'pipeline exited with code {proc.returncode}'}"
                 self._reload_runs()
             else:
                 self.pipeline_running = False

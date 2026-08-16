@@ -150,17 +150,15 @@ def _rss_kb() -> int | None:
 def _trim_heap() -> None:
     """Hand freed memory back to the OS and log how much that recovered.
 
-    The pipeline runs as a thread inside the web process, so everything a run
-    allocates stays in that granian worker's address space: after run 283 the
-    worker sat at 520MB of anonymous memory against 105MB for its idle
-    siblings, and its peak had been only 578MB — barely any of it ever came
-    back. glibc gives each allocating thread its own arena (extraction alone
-    uses 8 threads, dedup another 6) and never returns those arenas by itself.
+    Kept for the number it prints, not for the memory it saves. A run now has
+    its own process (src/web/runner.py), so everything it allocated goes back
+    to the kernel a moment after this line is logged either way — when the
+    pipeline ran as a thread in the web process it did not, and 40MB out of
+    ~225MB was all this could recover.
 
-    This is therefore a measurement as much as a fix. If RSS drops back toward
-    idle, the memory was freed by Python and merely held by the allocator; if
-    it stays put, something in the run is still genuinely referenced and only a
-    heap dump (or running the pipeline as its own process) will settle it.
+    The line stays because it is the cheapest signal we have about the shape of
+    a run's memory: RSS at the end of a run, and how much of it Python had
+    already freed but the allocator was still sitting on.
     """
     before = _rss_kb()
     gc.collect()
@@ -511,6 +509,8 @@ def main():
                         help="Write accepted items for a run to Notion")
     parser.add_argument("--browser-login", action="store_true",
                         help="Open browser for manual Medium login (saves session)")
+    parser.add_argument("--model", metavar="NAME",
+                        help="Scoring model to use (default: auto-detect)")
     args = parser.parse_args()
 
     if args.browser_login:
@@ -521,7 +521,8 @@ def main():
     elif args.schedule:
         start_scheduler()
     else:
-        asyncio.run(run_pipeline())
+        model = None if args.model in (None, "", "auto") else args.model
+        asyncio.run(run_pipeline(model=model))
 
 
 if __name__ == "__main__":

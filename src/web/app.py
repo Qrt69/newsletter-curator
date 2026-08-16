@@ -4,7 +4,6 @@ Reflex web app for the Newsletter Curator review UI.
 Single page with run selector, items table, and detail dialog.
 """
 
-import asyncio
 import os
 import sys
 import threading
@@ -16,6 +15,7 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 
 from .state import DigestState, DATABASE_OPTIONS
+from . import runner
 from ..storage import lock
 
 
@@ -662,15 +662,16 @@ def _is_locked() -> bool:
     return lock.is_locked()
 
 
-def _start_pipeline_thread(model: str | None = None):
-    """Start the pipeline in a background thread."""
-    def _run():
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-        from scripts.run_weekly import run_pipeline
-        asyncio.run(run_pipeline(model=model))
+def _start_pipeline_process(model: str | None = None):
+    """
+    Start the pipeline as its own process (see src/web/runner.py).
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+    Nothing here waits for the run, so a thread is left behind purely to reap
+    the child: without a `wait()` it would sit as a zombie in the web process
+    until the container restarts. The UI path in state.py reaps by polling.
+    """
+    proc = runner.start(model)
+    threading.Thread(target=proc.wait, daemon=True).start()
 
 
 async def _api_pipeline_trigger(request):
@@ -679,7 +680,10 @@ async def _api_pipeline_trigger(request):
         return JSONResponse({"status": "already_running"})
     raw = request.query_params.get("model", "")
     model = None if raw in ("", "auto") else raw
-    _start_pipeline_thread(model=model)
+    try:
+        _start_pipeline_process(model=model)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
     return JSONResponse({"status": "started"})
 
 

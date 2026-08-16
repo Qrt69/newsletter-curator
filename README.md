@@ -96,19 +96,26 @@ Docker Compose on Hetzner VPS with Caddy reverse proxy:
 docker compose up -d --build
 ```
 
-### Starting a run (host script, not in a container)
+### Memory: every run gets its own process
 
-Each pipeline run leaves ~435MB of anonymous memory behind in the granian
-worker that ran it, which reaches `mem_limit: 6g` in under two weeks at a run a
-day. Instead of chasing the cause, every run starts from a clean process:
-`scripts/nc-start-run.sh` restarts the web container, waits until the app
-answers again, and only then triggers the run over the local API.
+A pipeline run leaves ~435MB of anonymous memory behind. While the run was a
+thread inside the web process that was ~435MB the granian worker never gave
+back, reaching `mem_limit: 6g` in under two weeks at a run a day. A
+`gc.collect()` plus `malloc_trim(0)` at the end of a run recovered 40MB of it,
+and capping glibc's arenas cost more in speed than it gave back in memory.
 
-The restart is at the *start* of a run rather than after it, because the review
-UI has to stay up afterwards -- that is where proposals are judged before they
-go to Notion. Use this script instead of the "Run Pipeline" button; the button
-starts the pipeline inside the process that still carries the previous run's
-heap. It lives on the host, so a rebuilt machine needs it installed again:
+So the cause was never settled, and no longer has to be: a run happens in a
+child process now (`src/web/runner.py`), which hands its whole address space
+back to the kernel when it exits. Both the "Run Pipeline" button and
+`GET /api/pipeline/trigger` go through it, so every run starts and ends clean.
+The lock, cancel signal, progress display and log were already files under
+`DATA_DIR`, so they cross the process boundary unchanged.
+
+`scripts/nc-start-run.sh` additionally recycles the whole web container before
+triggering a run -- belt-and-braces now rather than the fix itself. Its restart
+is at the *start* of a run, never after: the review UI has to stay up
+afterwards, because that is where proposals are judged before they go to Notion.
+It lives on the host, so a rebuilt machine needs it installed again:
 
 ```bash
 install -D -m 755 scripts/nc-start-run.sh /home/kurt/bin/nc-start-run.sh
