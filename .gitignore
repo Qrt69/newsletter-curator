@@ -28,3 +28,6 @@ wheels/
 
 # Reflex app directory (compiled output)
 newsletter_curator/
+
+# Claude Code: share the project notes, keep the per-machine permissions local
+.claude/settings.local.json
