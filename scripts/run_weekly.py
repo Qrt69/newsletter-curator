@@ -31,7 +31,7 @@ load_dotenv()
 
 from src.email.fetcher import EmailFetcher
 from src.email.extractor import ContentExtractor
-from src.email.browser import BrowserSession, BrowserFetcher
+from src.email.browser import BrowserSession, BrowserPool
 from src.intelligence.scorer import Scorer
 from src.intelligence.router import Router
 from src.intelligence.feedback import FeedbackProcessor
@@ -48,6 +48,13 @@ DATA_DIR = os.environ.get("DATA_DIR", ".")
 DB_PATH = os.path.join(DATA_DIR, "digest.db")
 PROGRESS_FILE = os.path.join(DATA_DIR, ".pipeline_progress")
 LOG_FILE = os.path.join(DATA_DIR, "pipeline.log")
+
+# How many Chromiums may resolve/fetch links at the same time. Nearly every
+# newsletter link is a beehiiv tracking URL that httpx cannot follow (403), so
+# extraction speed is set by this number: one at a time cost 16 minutes for 30
+# emails. Each launched instance costs ~115MB RSS, released on close, so four
+# fit comfortably inside the container's 6GB limit.
+BROWSER_POOL_SIZE = int(os.environ.get("BROWSER_POOL_SIZE", "4"))
 
 logger = logging.getLogger("pipeline")
 
@@ -183,7 +190,7 @@ async def _run_pipeline_steps(model: str | None, closers: list):
     skip_browser = os.environ.get("SKIP_BROWSER_LOGIN", "").lower() in ("1", "true", "yes")
     if skip_browser:
         print("\n[1b] Browser login skipped (SKIP_BROWSER_LOGIN is set)")
-        browser_fetcher = BrowserFetcher()
+        browser_fetcher = BrowserPool(size=BROWSER_POOL_SIZE)
     else:
         from src.email.browser import needs_browser
         from src.email.extractor import ContentExtractor as _CE
@@ -205,11 +212,14 @@ async def _run_pipeline_steps(model: str | None, closers: list):
             print("\n[1b] Medium/Beehiiv links found, checking browser session...")
             session = BrowserSession(fetcher)
             logged_in = await session.ensure_logged_in()
-            browser_fetcher = BrowserFetcher(state_path=session.state_path) if logged_in else BrowserFetcher()
+            browser_fetcher = BrowserPool(
+                size=BROWSER_POOL_SIZE,
+                state_path=session.state_path if logged_in else None,
+            )
             print(f"  Medium session: {'active' if logged_in else 'not available (will try without auth)'}")
         else:
             print("\n[1b] No Medium/Beehiiv links found, skipping browser login")
-            browser_fetcher = BrowserFetcher()
+            browser_fetcher = BrowserPool(size=BROWSER_POOL_SIZE)
 
     _check_cancel()
 

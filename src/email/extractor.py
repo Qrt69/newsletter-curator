@@ -8,7 +8,6 @@ redirects, and extracts article text via trafilatura.
 import concurrent.futures
 import logging
 import re
-import threading
 from urllib.parse import urlparse
 
 import httpx
@@ -333,6 +332,13 @@ class ContentExtractor:
         user_agent: str | None = None,
         browser_fetcher=None,
     ):
+        """
+        browser_fetcher: a BrowserPool (what the pipeline passes) or a single
+            BrowserFetcher; both expose resolve_url/fetch_page/close. There is
+            deliberately no lock around it here — a pool already bounds how many
+            browser calls run at once, and a lock would put every link back
+            behind one Chromium.
+        """
         ua = user_agent or _DEFAULT_UA
         self._client = httpx.Client(
             timeout=timeout,
@@ -341,7 +347,6 @@ class ContentExtractor:
             headers={"User-Agent": ua},
         )
         self._browser = browser_fetcher
-        self._browser_lock = threading.Lock()
 
     # ── Link parsing ──────────────────────────────────────────────
 
@@ -440,8 +445,7 @@ class ContentExtractor:
         # Try browser first for known blocked domains
         if self._browser and needs_browser(url):
             try:
-                with self._browser_lock:
-                    return self._browser.resolve_url(url)
+                return self._browser.resolve_url(url)
             except Exception:
                 pass  # Fall through to HTTP
 
@@ -465,8 +469,7 @@ class ContentExtractor:
             # If resolved URL is still on a tracking domain, try browser
             if self._browser and needs_browser(resolved):
                 try:
-                    with self._browser_lock:
-                        return self._browser.resolve_url(url)
+                    return self._browser.resolve_url(url)
                 except Exception:
                     pass
             return resolved, None
@@ -474,8 +477,7 @@ class ContentExtractor:
         # Everything failed
         if self._browser and needs_browser(url):
             try:
-                with self._browser_lock:
-                    return self._browser.resolve_url(url)
+                return self._browser.resolve_url(url)
             except Exception as exc:
                 return url, f"redirect_failed: {exc}"
         return url, "redirect_failed: HTTP 403 or blocked"
@@ -509,8 +511,7 @@ class ContentExtractor:
         except httpx.HTTPError as exc:
             # Browser fallback for known domains
             if self._browser and needs_browser(url):
-                with self._browser_lock:
-                    html, browser_error = self._browser.fetch_page(url)
+                html, browser_error = self._browser.fetch_page(url)
                 if browser_error or not html:
                     return {
                         **base,

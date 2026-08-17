@@ -10,6 +10,7 @@ Usage:
 
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -59,6 +60,113 @@ def test_extract_otp_code():
     assert extract("<p>Code: 1234567</p>") is None
 
     print("  [PASS] test_extract_otp_code")
+
+
+def _pool_of_fakes(size, fake_cls):
+    """Build a BrowserPool of stub fetchers, so no Chromium is launched."""
+    import src.email.browser as browser_mod
+
+    real = browser_mod.BrowserFetcher
+    browser_mod.BrowserFetcher = fake_cls
+    try:
+        return browser_mod.BrowserPool(size=size)
+    finally:
+        browser_mod.BrowserFetcher = real
+
+
+def test_browser_pool_calls_run_in_parallel():
+    """Pool of N must run N calls at once — a serialized pool trips the barrier."""
+    import threading
+    import concurrent.futures
+
+    barrier = threading.Barrier(3, timeout=5)
+
+    class FakeFetcher:
+        def __init__(self, state_path=None):
+            pass
+
+        def resolve_url(self, url):
+            barrier.wait()  # BrokenBarrierError if the calls are serialized
+            return url, None
+
+    pool = _pool_of_fakes(3, FakeFetcher)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as workers:
+        results = [f.result() for f in [
+            workers.submit(pool.resolve_url, f"https://example.com/{i}") for i in range(3)
+        ]]
+
+    assert sorted(u for u, _ in results) == [f"https://example.com/{i}" for i in range(3)]
+    print("  [PASS] test_browser_pool_calls_run_in_parallel")
+
+
+def test_browser_pool_bounds_concurrency():
+    """More callers than fetchers must queue, never launch extra Chromiums."""
+    import threading
+    import concurrent.futures
+
+    lock = threading.Lock()
+    live = 0
+    peak = 0
+
+    class FakeFetcher:
+        def __init__(self, state_path=None):
+            pass
+
+        def fetch_page(self, url, retries=2, retry_delay=5.0):
+            nonlocal live, peak
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            time.sleep(0.05)
+            with lock:
+                live -= 1
+            return "<html></html>", None
+
+    pool = _pool_of_fakes(2, FakeFetcher)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as workers:
+        for f in [workers.submit(pool.fetch_page, "https://medium.com/p") for _ in range(8)]:
+            f.result()
+
+    assert peak <= 2, f"expected at most 2 concurrent browser calls, saw {peak}"
+    print("  [PASS] test_browser_pool_bounds_concurrency")
+
+
+def test_browser_pool_closes_every_fetcher():
+    """One failing close must not leave the other Chromiums running."""
+    closed = []
+
+    class FakeFetcher:
+        def __init__(self, state_path=None):
+            self.index = len(closed)
+
+        def close(self):
+            closed.append(self)
+            if len(closed) == 1:
+                raise RuntimeError("close failed")
+
+    pool = _pool_of_fakes(3, FakeFetcher)
+    pool.close()
+
+    assert len(closed) == 3, f"expected all 3 fetchers closed, got {len(closed)}"
+    pool.close()  # idempotent
+    assert len(closed) == 3
+
+    print("  [PASS] test_browser_pool_closes_every_fetcher")
+
+
+def test_browser_pool_size_validated():
+    """A pool of zero would silently disable the browser fallback."""
+    from src.email.browser import BrowserPool
+
+    for bad in (0, -1):
+        try:
+            BrowserPool(size=bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"BrowserPool(size={bad}) should raise ValueError")
+
+    print("  [PASS] test_browser_pool_size_validated")
 
 
 def test_browser_fetcher_public():
@@ -193,6 +301,10 @@ if __name__ == "__main__":
     print("Unit tests:")
     test_needs_browser()
     test_extract_otp_code()
+    test_browser_pool_calls_run_in_parallel()
+    test_browser_pool_bounds_concurrency()
+    test_browser_pool_closes_every_fetcher()
+    test_browser_pool_size_validated()
     test_browser_fetcher_public()
 
     print("\nIntegration tests:")
