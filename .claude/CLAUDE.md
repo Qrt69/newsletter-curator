@@ -140,6 +140,18 @@ container CPU ~2% — pure waiting). `BrowserPool` (`src/email/browser.py`) keep
 Do not put a lock back around `self._browser` in the extractor: that would return every
 link to a single Chromium and the 16 minutes with it.
 
+**Every browser call has a deadline, and blowing it kills the fetcher.** Of the Playwright
+calls in `_fetch_page` only `page.goto` has a timeout of its own; `new_context()`,
+`page.content()` and `context.close()` have none. Run 289 (2026-08-21) parked on
+`Extracting content (1/21 emails)` for 50 minutes because one Chromium lost the zygote it
+forks renderers from: the call never returned, its owner thread never came back, and
+`pool.map` in the extractor waited on it forever. `BrowserFetcher._run` now takes a hard
+`timeout=`; on expiry it *wedges* the fetcher — SIGKILLs its browser tree, which is the
+only thing that can unblock the parked owner thread — and `BrowserPool` swaps in a fresh,
+unlaunched fetcher so the pool keeps its size. The killed pids are found via the node
+driver's pid (`_driver_pid`), not by diffing `/proc` around the launch: concurrent launches
+see each other's children, so the old diff had every fetcher claiming all four Chromiums.
+
 ## Conventions
 - Type hints throughout (Python 3.13+)
 - Graceful fallbacks (HTTP -> Browser for extraction)

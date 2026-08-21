@@ -82,6 +82,8 @@ def test_browser_pool_calls_run_in_parallel():
     barrier = threading.Barrier(3, timeout=5)
 
     class FakeFetcher:
+        is_wedged = False
+
         def __init__(self, state_path=None):
             pass
 
@@ -109,6 +111,8 @@ def test_browser_pool_bounds_concurrency():
     peak = 0
 
     class FakeFetcher:
+        is_wedged = False
+
         def __init__(self, state_path=None):
             pass
 
@@ -136,6 +140,8 @@ def test_browser_pool_closes_every_fetcher():
     closed = []
 
     class FakeFetcher:
+        is_wedged = False
+
         def __init__(self, state_path=None):
             self.index = len(closed)
 
@@ -152,6 +158,96 @@ def test_browser_pool_closes_every_fetcher():
     assert len(closed) == 3
 
     print("  [PASS] test_browser_pool_closes_every_fetcher")
+
+
+def test_run_deadline_wedges_fetcher():
+    """A Playwright call that never returns must not park the run forever."""
+    import threading
+    from src.email.browser import BrowserFetcher, BrowserTimeout
+
+    released = threading.Event()
+    killed = []
+
+    fetcher = BrowserFetcher()
+    fetcher._kill_tracked_pids = lambda: (killed.append(True), released.set())
+
+    try:
+        fetcher._run(lambda: released.wait(10), timeout=0.2)
+    except BrowserTimeout:
+        pass
+    else:
+        raise AssertionError("a call past its deadline should raise BrowserTimeout")
+
+    assert killed, "wedging must kill the browser processes — that is what unblocks it"
+    assert fetcher.is_wedged
+
+    # A wedged fetcher is unusable, and says so instead of blocking again.
+    html, error = fetcher.fetch_page("https://medium.com/p")
+    assert html == "" and "browser_unavailable" in error, error
+    url, error = fetcher.resolve_url("https://medium.com/p")
+    assert url == "https://medium.com/p" and "browser_unavailable" in error, error
+
+    fetcher.close()  # Must not queue behind the dead call
+    released.set()
+
+    print("  [PASS] test_run_deadline_wedges_fetcher")
+
+
+def test_fetch_page_reports_timeout():
+    """A hung fetch returns an error tuple, so extraction of the link continues."""
+    import threading
+    from src.email import browser as browser_mod
+
+    released = threading.Event()
+    fetcher = browser_mod.BrowserFetcher()
+    fetcher._kill_tracked_pids = lambda: released.set()
+    fetcher._fetch_page = lambda url, retries, retry_delay: released.wait(10)
+
+    real = browser_mod._fetch_timeout
+    browser_mod._fetch_timeout = lambda retries, retry_delay: 0.2
+    try:
+        html, error = fetcher.fetch_page("https://medium.com/p")
+    finally:
+        browser_mod._fetch_timeout = real
+        released.set()
+
+    assert html == "", html
+    assert error and error.startswith("browser_timeout:"), error
+    assert fetcher.is_wedged
+
+    print("  [PASS] test_fetch_page_reports_timeout")
+
+
+def test_browser_pool_replaces_wedged_fetcher():
+    """A wedged fetcher must leave the pool without shrinking it."""
+    from src.email import browser as browser_mod
+
+    class FakeFetcher:
+        def __init__(self, state_path=None):
+            self.is_wedged = False
+            self.calls = 0
+
+        def fetch_page(self, url, retries=2, retry_delay=5.0):
+            self.calls += 1
+            self.is_wedged = True  # Every call hangs
+            return "", "browser_timeout: hung"
+
+    real = browser_mod.BrowserFetcher
+    browser_mod.BrowserFetcher = FakeFetcher  # Also covers the replacements
+    try:
+        pool = browser_mod.BrowserPool(size=2)
+        wedged = list(pool._fetchers)
+
+        for _ in range(4):
+            pool.fetch_page("https://medium.com/p")
+    finally:
+        browser_mod.BrowserFetcher = real
+
+    assert pool.size == 2, f"pool shrank to {pool.size}"
+    assert not any(f.is_wedged for f in pool._fetchers), "a wedged fetcher stayed in the pool"
+    assert all(f.calls <= 1 for f in wedged), "a wedged fetcher was handed out again"
+
+    print("  [PASS] test_browser_pool_replaces_wedged_fetcher")
 
 
 def test_browser_pool_size_validated():
@@ -305,6 +401,9 @@ if __name__ == "__main__":
     test_browser_pool_bounds_concurrency()
     test_browser_pool_closes_every_fetcher()
     test_browser_pool_size_validated()
+    test_run_deadline_wedges_fetcher()
+    test_fetch_page_reports_timeout()
+    test_browser_pool_replaces_wedged_fetcher()
     test_browser_fetcher_public()
 
     print("\nIntegration tests:")

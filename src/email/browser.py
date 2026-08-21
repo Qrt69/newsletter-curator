@@ -32,6 +32,23 @@ logger = logging.getLogger("pipeline.browser")
 # Domains that need browser-based fetching
 BROWSER_DOMAINS = {"medium.com", "beehiiv.com"}
 
+# Deadlines for a whole Playwright call, enforced from the calling thread.
+# Only page.goto() carries a timeout of its own (30s); new_context(), new_page(),
+# page.content() and context.close() have none, so a Chromium that can no longer
+# fork a renderer parks the call — and with it the run — forever. These are
+# ceilings on the worst *legitimate* case, not the expected duration.
+_RESOLVE_TIMEOUT = 90.0
+_CLOSE_TIMEOUT = 60.0
+
+
+def _fetch_timeout(retries: int, retry_delay: float) -> float:
+    """Ceiling for one fetch_page: every attempt's goto plus its retry sleep."""
+    return (retries + 1) * 45.0 + retries * retry_delay + 15.0
+
+
+class BrowserTimeout(Exception):
+    """A Playwright call blew its deadline; the fetcher that ran it is dead."""
+
 
 def _default_state_path() -> str:
     data_dir = os.environ.get("DATA_DIR", ".")
@@ -96,6 +113,22 @@ def _descendant_pids(root: int) -> set[int]:
     return found
 
 
+def _driver_pid(playwright) -> int | None:
+    """
+    PID of the node driver behind a started Playwright, or None.
+
+    Everything Chromium spawns descends from it, so it is the one handle that
+    identifies *this* fetcher's processes. Diffing /proc before and after a
+    launch cannot: concurrent launches in a pool see each other's children and
+    every fetcher ends up claiming all of them.
+    """
+    try:
+        return playwright._impl_obj._connection._transport._proc.pid
+    except Exception:
+        logger.warning("[browser] could not determine driver pid", exc_info=True)
+        return None
+
+
 def needs_browser(url: str) -> bool:
     """Check if a URL belongs to a domain that needs browser-based fetching."""
     try:
@@ -137,33 +170,82 @@ class BrowserFetcher:
         self._owner: concurrent.futures.ThreadPoolExecutor | None = None
         self._owner_lock = threading.Lock()
         self._closed = False
-        # Processes spawned by the launch, killed only if close() fails.
+        self._wedged = False
+        # Processes spawned by the launch, killed if close() fails or a call
+        # blows its deadline. _driver_pid is the root of that tree.
+        self._driver_pid: int | None = None
         self._child_pids: list[int] = []
 
     # ── Owner thread ──────────────────────────────────────────────
 
-    def _run(self, fn, *args):
-        """Run a Playwright call on the owner thread and return its result."""
+    def _run(self, fn, *args, timeout: float):
+        """
+        Run a Playwright call on the owner thread and return its result.
+
+        `timeout` is a hard deadline: the sync API offers no way to interrupt a
+        call, so a hang here is only escapable by killing the browser processes.
+        That is what _wedge() does, and why a timeout retires the fetcher rather
+        than freeing it for the next caller — its owner thread stays parked
+        inside the dead call until the kill lands.
+        """
         with self._owner_lock:
-            if self._closed:
+            if self._closed or self._wedged:
                 raise RuntimeError("BrowserFetcher is closed")
             if self._owner is None:
                 self._owner = concurrent.futures.ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="playwright-owner",
                 )
             owner = self._owner
-        return owner.submit(fn, *args).result()
+        try:
+            return owner.submit(fn, *args).result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            self._wedge(f"{getattr(fn, '__name__', fn)} exceeded {timeout:.0f}s")
+            raise BrowserTimeout(
+                f"Playwright call did not return within {timeout:.0f}s"
+            ) from None
+
+    def _wedge(self, detail: str):
+        """
+        Give up on this fetcher: kill its browser tree and retire it.
+
+        The kill is not cleanup for later — it is what unblocks the owner
+        thread. Once the driver is gone the parked call raises, the thread
+        unwinds, and the executor (already shut down here) lets it exit.
+        """
+        with self._owner_lock:
+            if self._wedged:
+                return
+            self._wedged = True
+            self._closed = True  # close() must not queue behind the dead call
+            owner, self._owner = self._owner, None
+
+        logger.error("[browser] wedged: %s — killing browser processes", detail)
+        print(f"  [browser] call hung ({detail}), killing browser processes")
+        self._kill_tracked_pids()
+        # Both objects live on a thread we no longer control; dropping the
+        # references keeps a later close() from touching them.
+        self._browser = None
+        self._playwright = None
+        if owner is not None:
+            owner.shutdown(wait=False)
 
     def _kill_tracked_pids(self):
-        """Backstop for a failed close: SIGKILL the processes we spawned."""
+        """SIGKILL the processes we spawned, including any added since launch."""
         sig = getattr(signal, "SIGKILL", signal.SIGTERM)
-        for pid in self._child_pids:
+        pids = set(self._child_pids)
+        if self._driver_pid:
+            # Renderers and utility processes appear long after the launch.
+            pids |= _descendant_pids(self._driver_pid) | {self._driver_pid}
+        # Lowest pid first: driver, then browser, then the children it
+        # would otherwise restart on their way out.
+        for pid in sorted(pids):
             try:
                 os.kill(pid, sig)
                 logger.warning("[browser] killed leaked process %d", pid)
             except OSError:
                 pass  # Already gone, or not ours to kill
         self._child_pids = []
+        self._driver_pid = None
 
     # ── Playwright (owner thread only) ────────────────────────────
 
@@ -184,10 +266,18 @@ class BrowserFetcher:
             self._playwright = None
             self._browser = None
             raise
-        self._child_pids = sorted(_descendant_pids(os.getpid()) - before)
+        self._driver_pid = _driver_pid(self._playwright)
+        if self._driver_pid:
+            self._child_pids = sorted(
+                {self._driver_pid} | _descendant_pids(self._driver_pid)
+            )
+        else:
+            # Fallback: racy in a pool, but better than no handle at all.
+            self._child_pids = sorted(_descendant_pids(os.getpid()) - before)
         logger.info(
-            "[browser] launched on thread '%s' (pids: %s)",
+            "[browser] launched on thread '%s' (driver %s, pids: %s)",
             threading.current_thread().name,
+            self._driver_pid or "unknown",
             self._child_pids or "unknown",
         )
 
@@ -269,6 +359,11 @@ class BrowserFetcher:
 
     # ── Public API (any thread) ───────────────────────────────────
 
+    @property
+    def is_wedged(self) -> bool:
+        """Whether a call hung here; such a fetcher can never be used again."""
+        return self._wedged
+
     def fetch_page(
         self, url: str, retries: int = 2, retry_delay: float = 5.0,
     ) -> tuple[str, str | None]:
@@ -281,7 +376,12 @@ class BrowserFetcher:
             Tuple of (html_content, error_or_none)
         """
         try:
-            return self._run(self._fetch_page, url, retries, retry_delay)
+            return self._run(
+                self._fetch_page, url, retries, retry_delay,
+                timeout=_fetch_timeout(retries, retry_delay),
+            )
+        except BrowserTimeout as exc:
+            return "", f"browser_timeout: {exc}"
         except RuntimeError as exc:
             return "", f"browser_unavailable: {exc}"
 
@@ -293,7 +393,9 @@ class BrowserFetcher:
             Tuple of (final_url, error_or_none)
         """
         try:
-            return self._run(self._resolve_url, url)
+            return self._run(self._resolve_url, url, timeout=_RESOLVE_TIMEOUT)
+        except BrowserTimeout as exc:
+            return url, f"browser_timeout: {exc}"
         except RuntimeError as exc:
             return url, f"browser_unavailable: {exc}"
 
@@ -315,7 +417,7 @@ class BrowserFetcher:
             return  # Browser was never launched
 
         try:
-            owner.submit(self._close).result(timeout=60)
+            owner.submit(self._close).result(timeout=_CLOSE_TIMEOUT)
         except Exception:
             logger.exception("[browser] close failed; killing browser processes")
             print("  [browser] close failed, killing browser processes")
@@ -354,7 +456,9 @@ class BrowserPool:
     def __init__(self, size: int = 4, state_path: str | None = None):
         if size < 1:
             raise ValueError(f"BrowserPool size must be at least 1, got {size}")
+        self._state_path = state_path
         self._fetchers = [BrowserFetcher(state_path=state_path) for _ in range(size)]
+        self._fetchers_lock = threading.Lock()
         # LIFO, so a run with only a handful of browser links keeps reusing the
         # same warm fetcher and the other Chromiums are never launched at all
         # (BrowserFetcher launches lazily, on first use).
@@ -370,12 +474,33 @@ class BrowserPool:
 
     @contextlib.contextmanager
     def _lease(self):
-        """Borrow a fetcher, blocking while all of them are busy."""
+        """
+        Borrow a fetcher, blocking while all of them are busy.
+
+        A fetcher that wedged is not handed back out — its owner thread is
+        parked in a dead Playwright call — but the pool must not shrink either,
+        or a run that hits four hangs would be left with no browser at all. So
+        it is swapped for a fresh, unlaunched one, which costs a Chromium
+        launch on first use and nothing until then.
+        """
         fetcher = self._idle.get()
         try:
             yield fetcher
         finally:
+            if fetcher.is_wedged and not self._closed:
+                fetcher = self._replace(fetcher)
             self._idle.put(fetcher)
+
+    def _replace(self, wedged: BrowserFetcher) -> BrowserFetcher:
+        """Swap a wedged fetcher for a fresh one, so close() still covers it."""
+        fresh = BrowserFetcher(state_path=self._state_path)
+        with self._fetchers_lock:
+            try:
+                self._fetchers[self._fetchers.index(wedged)] = fresh
+            except ValueError:
+                self._fetchers.append(fresh)  # Already swapped out; keep size
+        logger.warning("[pool] replaced a wedged fetcher with a fresh one")
+        return fresh
 
     def fetch_page(
         self, url: str, retries: int = 2, retry_delay: float = 5.0,
@@ -401,10 +526,13 @@ class BrowserPool:
             return
         self._closed = True
 
+        with self._fetchers_lock:
+            fetchers = list(self._fetchers)
+
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self.size, thread_name_prefix="browser-pool-close",
+            max_workers=len(fetchers), thread_name_prefix="browser-pool-close",
         ) as pool:
-            for future in [pool.submit(f.close) for f in self._fetchers]:
+            for future in [pool.submit(f.close) for f in fetchers]:
                 try:
                     future.result()
                 except Exception:
