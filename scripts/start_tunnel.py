@@ -324,6 +324,13 @@ def supervise():
         if alive_for >= STABLE_AFTER:
             delay = RETRY_DELAY  # was healthy for a while; treat as a fresh start
 
+        if not is_local_port_open():
+            # LM Studio is gone, so the top of the loop will idle instead of
+            # reconnecting. Announcing a reconnect here would promise something
+            # that never happens, and the backoff sleep would delay noticing
+            # that LM Studio came back.
+            continue
+
         try:
             logger.info("Reconnecting in %ds...", delay)
             time.sleep(delay)
