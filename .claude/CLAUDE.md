@@ -38,7 +38,7 @@ src/
     app.py              # Reflex UI components & Starlette API endpoints
     state.py            # Reflex state management (DigestState)
 scripts/
-  run_weekly.py         # Pipeline orchestration, scheduler (Sunday 18:00 UTC), CLI
+  run_weekly.py         # Pipeline orchestration + CLI (also holds the unused scheduler)
 tests/                  # 12 test modules covering all components
 ```
 
@@ -81,14 +81,22 @@ infra_reference   -> Infrastructure Knowledge Base
 
 ## Deployment (Docker)
 - `Dockerfile`: python:3.13, caddy, redis, Playwright Chromium
-- `docker-compose.yml`: web (port 8080) + scheduler containers, shared volume for digest.db
+- `docker-compose.yml`: `web` container only (port 8080), shared volume for digest.db
 - `Caddyfile.docker`: Routes API/events to Reflex backend, static files from /srv
 - `start.sh`: Starts redis, caddy, reflex backend
+
+**There is no scheduler. Runs are started by hand from the UI.** The `scheduler` service
+still exists in `docker-compose.yml` but sits behind `profiles: ["scheduler"]`, so
+`docker compose up` never starts it, and its dead container was removed on 2026-08-27.
+It was switched off deliberately: it ran every Sunday unnoticed and a successful run
+moves the emails to "Processed" without anyone reviewing them. It also cannot work
+unattended, because LM Studio is only switched on for a run. Do not re-enable it, and do
+not "fix" its absence.
 
 ## CLI Usage
 ```bash
 uv run python scripts/run_weekly.py                # Run pipeline once
-uv run python scripts/run_weekly.py --schedule     # Start weekly scheduler
+uv run python scripts/run_weekly.py --schedule     # Weekly scheduler -- deliberately unused, see Deployment
 uv run python scripts/run_weekly.py --write <id>   # Write run to Notion
 uv run python scripts/run_weekly.py --browser-login # Medium magic-link login
 ```
