@@ -22,6 +22,28 @@ from ..intelligence.feedback import FeedbackProcessor
 # All possible target databases (from the routing table)
 DATABASE_OPTIONS: list[str] = sorted(set(ROUTING_TABLE.values()))
 
+# Retry budget for the /v1/models call. See DigestState._get_models for why a
+# single attempt is not enough over the SSH tunnel.
+_MODEL_FETCH_ATTEMPTS = 3
+_MODEL_FETCH_BACKOFF = 0.4  # seconds, multiplied by the attempt number
+# Hard ceiling on the whole retry loop. Page load calls this synchronously, so
+# a dead tunnel (every attempt burning the full connect timeout) must not hold
+# the UI for attempts x timeout seconds.
+_MODEL_FETCH_DEADLINE = 12.0
+
+
+def _short_error(exc: Exception) -> str:
+    """One-line description of a transport failure, for the status bar."""
+    if isinstance(exc, httpx.ConnectError):
+        return "nothing listening -- is LM Studio running?"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timed out"
+    if isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
+        # Accepted the connection, then hung up before answering. Depending on
+        # how the peer closes, httpx calls this RemoteProtocolError or ReadError.
+        return "connection dropped before answering"
+    return type(exc).__name__
+
 
 def _get_store() -> DigestStore:
     """Create a fresh DigestStore connection (thread-safe)."""
@@ -70,8 +92,16 @@ class DigestState(rx.State):
 
     @rx.var(cache=True)
     def model_options(self) -> list[str]:
-        """All model options including 'auto' for the selector."""
-        return ["auto"] + self.available_models
+        """All model options including 'auto' for the selector.
+
+        Keeps whatever is currently selected in the list even when the fetch
+        failed and available_models is empty, so a dropped model list does not
+        blank out the selector or silently reset the choice.
+        """
+        options = ["auto"] + self.available_models
+        if self.selected_model and self.selected_model not in options:
+            options.append(self.selected_model)
+        return options
 
     # Pipeline trigger
     pipeline_running: bool = False
@@ -106,37 +136,82 @@ class DigestState(rx.State):
             return f"{api_base}/models"
         return f"{api_base}/v1/models"
 
-    def _fetch_models_impl(self, quiet: bool = False) -> None:
+    def _get_models(self) -> list[str]:
+        """
+        Ask LM Studio for its chat models, retrying transient transport errors.
+
+        The connection to LM Studio is a chain of hops -- container ->
+        socat on the VPS -> SSH reverse tunnel -> LM Studio on the PC -- and any
+        of them can accept a TCP connection and then drop it before answering.
+        httpx reports that as RemoteProtocolError ("Server disconnected without
+        sending a response") or ReadError. A refused connection is different --
+        that is a definite "LM Studio is off", so it is not retried. The pipeline never sees those: the scorer talks to
+        the same /v1/models endpoint through the OpenAI SDK, which keeps a warm
+        pooled connection and retries connection errors twice on its own. This
+        call used to be a bare one-shot httpx.get, which is why only the UI
+        complained. Retry here too, and give the read leg more than 5s -- the PC
+        answers slowly while it is busy scoring.
+
+        Raises the last httpx error if every attempt fails.
+        """
+        models_url = self._build_models_url()
+        timeout = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+        deadline = time.monotonic() + _MODEL_FETCH_DEADLINE
+        last_exc: Exception | None = None
+        with httpx.Client(timeout=timeout) as client:
+            for attempt in range(_MODEL_FETCH_ATTEMPTS):
+                try:
+                    resp = client.get(models_url)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    models = [m["id"] for m in data.get("data", []) if m.get("id")]
+                    # Filter out embedding models (not usable for scoring)
+                    return sorted(m for m in models if "embed" not in m.lower())
+                except httpx.ConnectError:
+                    # Refused / no route: a definite "not running", and each
+                    # attempt costs a full SYN timeout. Report it immediately.
+                    raise
+                except httpx.TransportError as exc:
+                    last_exc = exc
+                    backoff = _MODEL_FETCH_BACKOFF * (attempt + 1)
+                    if attempt == _MODEL_FETCH_ATTEMPTS - 1:
+                        break
+                    if time.monotonic() + backoff >= deadline:
+                        break  # out of budget; report the failure now
+                    time.sleep(backoff)
+        raise last_exc  # type: ignore[misc]
+
+    def _fetch_models_impl(self, quiet: bool = False) -> bool:
         """Fetch available models from LM Studio (internal implementation).
 
         Args:
             quiet: If True, don't set pipeline_status on failure (used for
                    page-load where failure is expected when tunnel is down).
+
+        Returns:
+            True if LM Studio answered (even with an empty list), False if it
+            could not be reached at all.
         """
         self.models_loading = True
-        models_url = self._build_models_url()
         try:
-            resp = httpx.get(models_url, timeout=5)
-            resp.raise_for_status()
-            data = resp.json()
-            models = [m["id"] for m in data.get("data", []) if m.get("id")]
-            # Filter out embedding models (not usable for scoring)
-            models = [m for m in models if "embed" not in m.lower()]
-            self.available_models = sorted(models)
-            if not quiet and not models:
+            self.available_models = self._get_models()
+            if not quiet and not self.available_models:
                 self.pipeline_status = "LM Studio running but no chat models loaded"
             elif self.pipeline_status and "LM Studio" in self.pipeline_status:
                 # Clear stale LM Studio error now that models loaded OK
                 self.pipeline_status = ""
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
+            return True
+        except httpx.TransportError as exc:
             self.available_models = []
             if not quiet:
-                self.pipeline_status = "Cannot reach LM Studio -- is it running?"
+                self.pipeline_status = f"Cannot reach LM Studio ({_short_error(exc)})"
         except Exception as exc:
             self.available_models = []
             if not quiet:
                 self.pipeline_status = f"Model fetch failed: {exc}"
-        self.models_loading = False
+        finally:
+            self.models_loading = False
+        return False
 
     def fetch_models(self) -> None:
         """Fetch models (used by on_click — no args allowed by Reflex)."""
@@ -189,16 +264,24 @@ class DigestState(rx.State):
                 self.pipeline_running = True
                 return
 
-            # Pre-flight: verify LM Studio is reachable before starting
+            # Pre-flight: look at LM Studio, but only refuse to start on a
+            # definite "no". A failed model list is not proof that LM Studio is
+            # down -- the tunnel drops the odd connection (see _get_models) --
+            # and blocking the run on it left no way to start at all. The
+            # scorer does its own preflight_check and fails the run fast with a
+            # clear message if the server really is unreachable.
+            warning = ""
             if os.environ.get("SCORER_BACKEND", "local") == "local":
                 self.pipeline_status = "Checking LM Studio..."
-                self.fetch_models()
-                if not self.available_models:
-                    self.pipeline_status = "Cannot start: LM Studio not reachable or no models loaded"
+                reached = self._fetch_models_impl(quiet=True)
+                if reached and not self.available_models:
+                    self.pipeline_status = "Cannot start: LM Studio has no chat models loaded"
                     return
+                if not reached:
+                    warning = " (could not read the model list -- starting anyway)"
 
             self.pipeline_running = True
-            self.pipeline_status = "Starting pipeline..."
+            self.pipeline_status = "Starting pipeline..." + warning
             self._force_stopped = False
             model = self.selected_model
 

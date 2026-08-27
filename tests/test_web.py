@@ -7,12 +7,16 @@ populate with test data, call state-like operations, verify results.
 Run: uv run python tests/test_web.py
 """
 
+import os
+import socket
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.storage.digest import DigestStore
+from src.web import state as web_state
 from src.web.state import DATABASE_OPTIONS
 
 
@@ -279,6 +283,134 @@ def test_multiple_runs():
     print("PASS\n")
 
 
+# ── Model list fetch ────────────────────────────────────────────
+
+class _ModelFetchShim:
+    """
+    Calls DigestState's model-fetch methods without the Reflex state machinery.
+
+    Plain attributes stand in for the state vars; the methods under test only
+    read and assign those.
+    """
+
+    _build_models_url = web_state.DigestState._build_models_url
+    _get_models = web_state.DigestState._get_models
+    _fetch_models_impl = web_state.DigestState._fetch_models_impl
+
+    def __init__(self):
+        self.available_models = []
+        self.models_loading = False
+        self.pipeline_status = ""
+        self.selected_model = "auto"
+
+
+def _flaky_model_server(drop_first: int):
+    """
+    Serve /v1/models, but hang up on the first `drop_first` connections without
+    answering -- the way the SSH tunnel to LM Studio intermittently behaves.
+
+    Returns (port, stop) and sets LLM_BASE_URL to point at it.
+    """
+    body = b'{"data":[{"id":"qwen2.5-14b-instruct"},{"id":"nomic-embed-text"}]}'
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(8)
+    remaining = [drop_first]
+
+    def serve():
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            if remaining[0] > 0:
+                remaining[0] -= 1
+                conn.close()  # accepted, then dropped before any response
+                continue
+            conn.recv(65536)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: %d\r\n"
+                b"Connection: close\r\n\r\n%s"
+                % (len(body), body)
+            )
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    os.environ["LLM_BASE_URL"] = f"http://127.0.0.1:{sock.getsockname()[1]}/v1"
+    return sock
+
+
+def test_model_fetch_retries_dropped_connection():
+    """A dropped connection is retried, not surfaced as an error."""
+    print("TEST: model fetch retries a dropped connection")
+    previous = os.environ.get("LLM_BASE_URL")
+    # Two drops, fixed: the retry budget has to absorb them for this to pass.
+    assert web_state._MODEL_FETCH_ATTEMPTS >= 3, "retry budget shrank below 2 drops"
+    sock = _flaky_model_server(drop_first=2)
+    try:
+        shim = _ModelFetchShim()
+        assert shim._fetch_models_impl(quiet=False) is True
+        # Embedding models are filtered out of the selector.
+        assert shim.available_models == ["qwen2.5-14b-instruct"], shim.available_models
+        assert shim.pipeline_status == "", shim.pipeline_status
+        assert shim.models_loading is False
+    finally:
+        sock.close()
+        if previous is None:
+            os.environ.pop("LLM_BASE_URL", None)
+        else:
+            os.environ["LLM_BASE_URL"] = previous
+    print("PASS\n")
+
+
+def test_model_fetch_gives_up_cleanly():
+    """When every attempt is dropped, report unreachable rather than raise."""
+    print("TEST: model fetch gives up cleanly")
+    previous = os.environ.get("LLM_BASE_URL")
+    sock = _flaky_model_server(drop_first=10_000)
+    try:
+        shim = _ModelFetchShim()
+        assert shim._fetch_models_impl(quiet=False) is False
+        assert shim.available_models == []
+        assert "Cannot reach LM Studio" in shim.pipeline_status, shim.pipeline_status
+        assert shim.models_loading is False
+
+        # quiet mode (page load) leaves the status bar alone
+        shim.pipeline_status = ""
+        assert shim._fetch_models_impl(quiet=True) is False
+        assert shim.pipeline_status == ""
+    finally:
+        sock.close()
+        if previous is None:
+            os.environ.pop("LLM_BASE_URL", None)
+        else:
+            os.environ["LLM_BASE_URL"] = previous
+    print("PASS\n")
+
+
+def test_model_options_keeps_selection():
+    """An empty model list must not blank out the current selection."""
+    print("TEST: model options keep the current selection")
+    shim = _ModelFetchShim()
+    assert web_state.DigestState.model_options.fget(shim) == ["auto"]
+
+    shim.selected_model = "qwen2.5-14b-instruct"
+    assert web_state.DigestState.model_options.fget(shim) == [
+        "auto",
+        "qwen2.5-14b-instruct",
+    ]
+
+    shim.available_models = ["qwen2.5-14b-instruct"]
+    assert web_state.DigestState.model_options.fget(shim) == [
+        "auto",
+        "qwen2.5-14b-instruct",
+    ]
+    print("PASS\n")
+
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -288,6 +420,9 @@ def main():
     test_database_options()
     test_empty_database()
     test_multiple_runs()
+    test_model_fetch_retries_dropped_connection()
+    test_model_fetch_gives_up_cleanly()
+    test_model_options_keeps_selection()
 
     print("=" * 60)
     print("ALL TESTS PASSED")
