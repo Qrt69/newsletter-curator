@@ -295,13 +295,20 @@ class _ModelFetchShim:
 
     _build_models_url = web_state.DigestState._build_models_url
     _get_models = web_state.DigestState._get_models
-    _fetch_models_impl = web_state.DigestState._fetch_models_impl
+    _apply_models = web_state.DigestState._apply_models
 
     def __init__(self):
         self.available_models = []
         self.models_loading = False
         self.pipeline_status = ""
         self.selected_model = "auto"
+
+    def fetch(self, quiet: bool = False) -> bool:
+        """The two steps _fetch_models_bg runs, without the Reflex plumbing."""
+        try:
+            return self._apply_models(self._get_models(), None, quiet)
+        except Exception as exc:
+            return self._apply_models([], exc, quiet)
 
 
 def _flaky_model_server(drop_first: int):
@@ -351,11 +358,10 @@ def test_model_fetch_retries_dropped_connection():
     sock = _flaky_model_server(drop_first=2)
     try:
         shim = _ModelFetchShim()
-        assert shim._fetch_models_impl(quiet=False) is True
+        assert shim.fetch(quiet=False) is True
         # Embedding models are filtered out of the selector.
         assert shim.available_models == ["qwen2.5-14b-instruct"], shim.available_models
         assert shim.pipeline_status == "", shim.pipeline_status
-        assert shim.models_loading is False
     finally:
         sock.close()
         if previous is None:
@@ -372,14 +378,16 @@ def test_model_fetch_gives_up_cleanly():
     sock = _flaky_model_server(drop_first=10_000)
     try:
         shim = _ModelFetchShim()
-        assert shim._fetch_models_impl(quiet=False) is False
+        assert shim.fetch(quiet=False) is False
         assert shim.available_models == []
-        assert "Cannot reach LM Studio" in shim.pipeline_status, shim.pipeline_status
-        assert shim.models_loading is False
+        # The relay reports "LM Studio is off" as a dropped connection, so the
+        # message must name the cause, not the symptom.
+        assert "doesn't appear to be running" in shim.pipeline_status, shim.pipeline_status
+        assert "disconnected" not in shim.pipeline_status.lower(), shim.pipeline_status
 
-        # quiet mode (page load) leaves the status bar alone
+        # quiet mode (the run pre-flight) leaves the status bar alone
         shim.pipeline_status = ""
-        assert shim._fetch_models_impl(quiet=True) is False
+        assert shim.fetch(quiet=True) is False
         assert shim.pipeline_status == ""
     finally:
         sock.close()
@@ -387,6 +395,27 @@ def test_model_fetch_gives_up_cleanly():
             os.environ.pop("LLM_BASE_URL", None)
         else:
             os.environ["LLM_BASE_URL"] = previous
+    print("PASS\n")
+
+
+def test_page_load_does_not_probe_lm_studio():
+    """
+    Opening the UI to review items must not touch LM Studio.
+
+    It is only switched on for a run, so probing on page load produced errors
+    for a server that was never meant to be running yet.
+    """
+    print("TEST: page load does not probe LM Studio")
+    import inspect
+
+    # Reflex wraps handlers in an EventHandler; .fn is the original function.
+    handler = web_state.DigestState.load_runs
+    source = inspect.getsource(getattr(handler, "fn", handler))
+    assert "_fetch_models_impl" not in source, source
+    assert "_get_models" not in source, source
+    # The dropdown is what triggers a fetch now, and off the event loop.
+    opener = web_state.DigestState.fetch_models_on_open
+    assert getattr(opener, "is_background", False), "must not block the UI"
     print("PASS\n")
 
 
@@ -422,6 +451,7 @@ def main():
     test_multiple_runs()
     test_model_fetch_retries_dropped_connection()
     test_model_fetch_gives_up_cleanly()
+    test_page_load_does_not_probe_lm_studio()
     test_model_options_keeps_selection()
 
     print("=" * 60)

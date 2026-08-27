@@ -43,6 +43,7 @@ MAX_RETRY_DELAY = 60        # ceiling for the backoff
 STABLE_AFTER = 120          # a tunnel alive this long resets the backoff
 HEALTH_INTERVAL = 300       # seconds between end-to-end probes
 FIRST_HEALTH_DELAY = 20     # first probe shortly after connecting
+IDLE_POLL_INTERVAL = 5      # seconds between local-port checks while idling
 
 # Only the Windows OpenSSH binary talks to the Windows ssh-agent service that
 # holds the passphrase-protected key. Git-Bash and WSL ssh do not see it and
@@ -217,17 +218,61 @@ def _start_tunnel_process() -> subprocess.Popen:
     )
 
 
+def wait_for_local_llm() -> float | None:
+    """
+    Block until LM Studio is listening locally.
+
+    Returns the seconds spent idling (0.0 if it was already up), or None if
+    interrupted.
+
+    LM Studio is only switched on for a run, so most of the day there is
+    nothing to forward. Connecting anyway meant the tunnel came up, failed its
+    health check ~20s later and restarted: 2657 reconnects over 14 days, 99.4%
+    of them while LM Studio was not listening, plus a log line for every one.
+
+    Idling here is cheap: a local connect attempt, no ssh process, no traffic
+    to the VPS and no log line per poll -- only the transitions are logged. It
+    is not instant, though: on Windows a connect to a closed loopback port
+    stays pending instead of being refused, so each check can take up to the
+    2s timeout in is_local_port_open() and the effective interval is roughly
+    IDLE_POLL_INTERVAL + 2s. That also means a check in flight when LM Studio
+    starts succeeds straight away, so the tunnel follows within seconds.
+    """
+    if is_local_port_open():
+        return 0.0
+    logger.info(
+        "LM Studio is not listening on %s:%d — idling (checking every %ds), "
+        "no tunnel until it starts",
+        LOCAL_HOST, LOCAL_PORT, IDLE_POLL_INTERVAL,
+    )
+    waited = 0.0
+    while True:
+        try:
+            time.sleep(IDLE_POLL_INTERVAL)
+        except KeyboardInterrupt:
+            logger.info("Tunnel stopped by user.")
+            return None
+        waited += IDLE_POLL_INTERVAL
+        if is_local_port_open():
+            logger.info("LM Studio is up after %.0fs idle — starting tunnel", waited)
+            return waited
+
+
 def supervise():
     """Keep the tunnel up until interrupted."""
     kill_stale_local_tunnels()
     delay = RETRY_DELAY
 
     while True:
-        if not is_local_port_open():
-            logger.warning(
-                "LM Studio is not listening on %s:%d — tunnel will connect but stay useless",
-                LOCAL_HOST, LOCAL_PORT,
-            )
+        idled = wait_for_local_llm()
+        if idled is None:
+            return
+        if idled:
+            # LM Studio was off and has just come back: a fresh start, not a
+            # continuation of whatever failed before. Only reset the backoff
+            # here -- repeated failures with LM Studio *up* are a real tunnel
+            # problem and must keep backing off.
+            delay = RETRY_DELAY
 
         proc = _start_tunnel_process()
         started = time.monotonic()
@@ -242,6 +287,12 @@ def supervise():
                 if health_check():
                     logger.info("Health check OK (uptime %.0fs)", now - started)
                     next_health = now + HEALTH_INTERVAL
+                elif not is_local_port_open():
+                    # LM Studio was switched off. Nothing wrong with the
+                    # tunnel; reporting it as a failure was what filled the log.
+                    logger.info("LM Studio stopped — closing the tunnel until it returns")
+                    proc.terminate()
+                    break
                 else:
                     logger.warning("Health check FAILED — restarting tunnel")
                     proc.terminate()

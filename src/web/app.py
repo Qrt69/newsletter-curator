@@ -229,6 +229,9 @@ def model_selector() -> rx.Component:
             DigestState.model_options,
             value=DigestState.selected_model,
             on_change=DigestState.set_selected_model,
+            # Ask LM Studio for its models only when the list is actually
+            # opened. It is normally switched off while reviewing items.
+            on_open_change=DigestState.fetch_models_on_open,
             size="2",
         ),
         rx.button(

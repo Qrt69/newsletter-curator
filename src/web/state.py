@@ -32,17 +32,25 @@ _MODEL_FETCH_BACKOFF = 0.4  # seconds, multiplied by the attempt number
 _MODEL_FETCH_DEADLINE = 12.0
 
 
-def _short_error(exc: Exception) -> str:
-    """One-line description of a transport failure, for the status bar."""
-    if isinstance(exc, httpx.ConnectError):
-        return "nothing listening -- is LM Studio running?"
+def _lm_studio_error(exc: Exception) -> str:
+    """
+    Status-bar message for a failed model fetch, named after the actual cause.
+
+    "LM Studio is off" does not reach us as a refusal. socat on the VPS listens
+    on 11234 independently of the tunnel and always accepts, then finds nothing
+    behind 127.0.0.1:22236 and closes without sending a byte; the same happens
+    one hop further when the tunnel is up but LM Studio is not. httpx calls that
+    RemoteProtocolError or ReadError -- "Server disconnected without sending a
+    response" -- which says nothing about the real problem. Measured over 14
+    days of tunnel.log, 99.4% of tunnel restarts happened while LM Studio was
+    not listening, so that signature means "not running", not "flaky network".
+    """
+    if isinstance(exc, (httpx.ConnectError, httpx.RemoteProtocolError,
+                        httpx.ReadError, httpx.WriteError)):
+        return "LM Studio doesn't appear to be running -- start it and try again"
     if isinstance(exc, httpx.TimeoutException):
-        return "timed out"
-    if isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
-        # Accepted the connection, then hung up before answering. Depending on
-        # how the peer closes, httpx calls this RemoteProtocolError or ReadError.
-        return "connection dropped before answering"
-    return type(exc).__name__
+        return "LM Studio did not answer in time -- still loading a model?"
+    return f"Could not read the model list: {type(exc).__name__}"
 
 
 def _get_store() -> DigestStore:
@@ -181,41 +189,76 @@ class DigestState(rx.State):
                     time.sleep(backoff)
         raise last_exc  # type: ignore[misc]
 
-    def _fetch_models_impl(self, quiet: bool = False) -> bool:
-        """Fetch available models from LM Studio (internal implementation).
+    def _apply_models(
+        self, models: list[str], exc: Exception | None, quiet: bool
+    ) -> bool:
+        """
+        Store the outcome of a model fetch.
 
-        Args:
-            quiet: If True, don't set pipeline_status on failure (used for
-                   page-load where failure is expected when tunnel is down).
+        Split out from the network call so the blocking and background paths
+        share one place that decides what the status bar says.
 
         Returns:
             True if LM Studio answered (even with an empty list), False if it
             could not be reached at all.
         """
-        self.models_loading = True
-        try:
-            self.available_models = self._get_models()
-            if not quiet and not self.available_models:
+        if exc is None:
+            self.available_models = models
+            if not quiet and not models:
                 self.pipeline_status = "LM Studio running but no chat models loaded"
             elif self.pipeline_status and "LM Studio" in self.pipeline_status:
                 # Clear stale LM Studio error now that models loaded OK
                 self.pipeline_status = ""
             return True
-        except httpx.TransportError as exc:
-            self.available_models = []
-            if not quiet:
-                self.pipeline_status = f"Cannot reach LM Studio ({_short_error(exc)})"
-        except Exception as exc:
-            self.available_models = []
-            if not quiet:
-                self.pipeline_status = f"Model fetch failed: {exc}"
-        finally:
-            self.models_loading = False
+        self.available_models = []
+        if not quiet:
+            self.pipeline_status = _lm_studio_error(exc)
         return False
 
-    def fetch_models(self) -> None:
-        """Fetch models (used by on_click — no args allowed by Reflex)."""
-        self._fetch_models_impl(quiet=False)
+    async def _fetch_models_bg(self, quiet: bool = False) -> None:
+        """
+        Fetch models off the event loop.
+
+        LM Studio is normally off, and a fetch against a dead tunnel takes a
+        second or two to give up. Doing that inline would freeze the UI, so the
+        blocking call runs in a thread and only the result touches state.
+
+        models_loading doubles as an in-flight guard, so it is cleared in a
+        finally: leaving it set would lock out every later fetch.
+        """
+        async with self:
+            if self.models_loading:
+                return  # a fetch is already in flight
+            self.models_loading = True
+        try:
+            models: list[str] = []
+            exc: Exception | None = None
+            try:
+                models = await asyncio.to_thread(self._get_models)
+            except Exception as err:
+                exc = err
+            async with self:
+                self._apply_models(models, exc, quiet)
+        finally:
+            async with self:
+                self.models_loading = False
+
+    @rx.event(background=True)
+    async def fetch_models(self):
+        """Refresh button: always report what happened."""
+        await self._fetch_models_bg(quiet=False)
+
+    @rx.event(background=True)
+    async def fetch_models_on_open(self, is_open: bool):
+        """
+        Load the model list when the dropdown is opened, not before.
+
+        The UI is mostly used to review items, with LM Studio switched off, so
+        probing it on page load only produced errors for a server that was
+        never meant to be running yet.
+        """
+        if is_open:
+            await self._fetch_models_bg(quiet=False)
 
     def set_selected_model(self, value: str) -> None:
         """Set the selected model for the next pipeline run."""
@@ -263,23 +306,34 @@ class DigestState(rx.State):
                 self.pipeline_status = "Pipeline already running"
                 self.pipeline_running = True
                 return
-
-            # Pre-flight: look at LM Studio, but only refuse to start on a
-            # definite "no". A failed model list is not proof that LM Studio is
-            # down -- the tunnel drops the odd connection (see _get_models) --
-            # and blocking the run on it left no way to start at all. The
-            # scorer does its own preflight_check and fails the run fast with a
-            # clear message if the server really is unreachable.
-            warning = ""
-            if os.environ.get("SCORER_BACKEND", "local") == "local":
+            local_backend = os.environ.get("SCORER_BACKEND", "local") == "local"
+            if local_backend:
                 self.pipeline_status = "Checking LM Studio..."
-                reached = self._fetch_models_impl(quiet=True)
-                if reached and not self.available_models:
+
+        # Pre-flight: look at LM Studio, but only refuse to start on a definite
+        # "no". A failed model list is not proof that LM Studio is down -- the
+        # relay reports a dead tunnel and a briefly-restarting one identically
+        # (see _lm_studio_error) -- and blocking the run on it left no way to
+        # start at all. The scorer does its own preflight_check and fails the
+        # run fast with a clear message if the server really is unreachable.
+        # Run off the event loop: this is a network call behind a state lock.
+        warning = ""
+        if local_backend:
+            reached: bool
+            try:
+                models = await asyncio.to_thread(self._get_models)
+                reached, exc = True, None
+            except Exception as err:
+                models, reached, exc = [], False, err
+            async with self:
+                self._apply_models(models, exc, quiet=True)
+                if reached and not models:
                     self.pipeline_status = "Cannot start: LM Studio has no chat models loaded"
                     return
-                if not reached:
-                    warning = " (could not read the model list -- starting anyway)"
+            if not reached:
+                warning = " (model list unavailable -- starting anyway)"
 
+        async with self:
             self.pipeline_running = True
             self.pipeline_status = "Starting pipeline..." + warning
             self._force_stopped = False
@@ -379,7 +433,7 @@ class DigestState(rx.State):
     def load_runs(self) -> None:
         """Load all runs from the database."""
         self.check_pipeline_status()
-        self._fetch_models_impl(quiet=True)  # Don't show errors on page load
+        # No model fetch here: see fetch_models_on_open.
         store = _get_store()
         # Silent cleanup of old rejected/skipped items on page load
         store.cleanup_old_items()
