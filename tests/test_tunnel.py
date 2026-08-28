@@ -107,22 +107,28 @@ class _DeadProcess:
 
     returncode = 1
 
+    def __init__(self, output=""):
+        self._output = output
+
     def poll(self):
         return self.returncode
 
     def communicate(self, timeout=None):
-        return ("", None)
+        return (self._output, None)
 
     def terminate(self):
         pass
 
 
-def _run_one_supervise_cycle(port_states):
+def _run_one_supervise_cycle(port_states, exit_output="", cleanup_status="FREED"):
     """
     Run supervise() until it asks for the local port one time too many.
 
     port_states drives is_local_port_open() call by call; when it runs out the
-    loop is broken so the test does not hang. Returns the log messages.
+    loop is broken so the test does not hang. exit_output is what the dead
+    tunnel printed, which is how supervise() decides whether the remote port
+    needs clearing; cleanup_status is what that clearing reports back. Returns
+    the log messages.
     """
     messages = []
 
@@ -143,6 +149,7 @@ def _run_one_supervise_cycle(port_states):
         start_tunnel._start_tunnel_process,
         start_tunnel.kill_stale_local_tunnels,
         start_tunnel.time.sleep,
+        start_tunnel.free_remote_port,
     )
     handler = _Capture()
     start_tunnel.logger.addHandler(handler)
@@ -152,9 +159,10 @@ def _run_one_supervise_cycle(port_states):
     start_tunnel.logger.setLevel(logging.INFO)
     try:
         start_tunnel.is_local_port_open = fake_port
-        start_tunnel._start_tunnel_process = lambda: _DeadProcess()
+        start_tunnel._start_tunnel_process = lambda: _DeadProcess(exit_output)
         start_tunnel.kill_stale_local_tunnels = lambda: None
         start_tunnel.time.sleep = lambda seconds: None
+        start_tunnel.free_remote_port = lambda: cleanup_status
         try:
             start_tunnel.supervise()
         except _StopLoop:
@@ -165,7 +173,8 @@ def _run_one_supervise_cycle(port_states):
         (start_tunnel.is_local_port_open,
          start_tunnel._start_tunnel_process,
          start_tunnel.kill_stale_local_tunnels,
-         start_tunnel.time.sleep) = originals
+         start_tunnel.time.sleep,
+         start_tunnel.free_remote_port) = originals
     return messages
 
 
@@ -195,6 +204,41 @@ def test_reconnect_is_announced_when_lm_studio_is_still_up():
     print("PASS\n")
 
 
+def test_failed_port_cleanup_is_escalated():
+    """
+    A cleanup that frees nothing must be loud.
+
+    free_remote_port() could not see the socket owner without root, so it
+    reported a success-shaped nothing ("FOREIGN_LISTENER") and killed nothing.
+    supervise() threw that result away, so the tunnel retried once a minute for
+    hours while the log showed only INFO lines -- 221 times before anyone
+    noticed. Anything but FREED/NO_LISTENER is now an ERROR that names the way
+    out by hand.
+    """
+    print("TEST: a cleanup that freed nothing is escalated")
+    messages = _run_one_supervise_cycle(
+        [True, True],
+        exit_output="Error: remote port forwarding failed for listen port 22236",
+        cleanup_status="STILL_BOUND",
+    )
+    joined = "\n".join(messages)
+    assert any("STILL BOUND after cleanup" in m for m in messages), joined
+    assert any("sudo ss -tlnp" in m for m in messages), joined
+    print("PASS\n")
+
+
+def test_successful_port_cleanup_is_not_escalated():
+    """A cleanup that really freed the port is progress, not something to shout about."""
+    print("TEST: a successful cleanup is not escalated")
+    messages = _run_one_supervise_cycle(
+        [True, True],
+        exit_output="Error: remote port forwarding failed for listen port 22236",
+        cleanup_status="FREED",
+    )
+    assert not any("STILL BOUND" in m for m in messages), "\n".join(messages)
+    print("PASS\n")
+
+
 # -- Main ------------------------------------------------------
 
 def main():
@@ -203,6 +247,8 @@ def main():
     test_idle_does_not_start_a_tunnel()
     test_no_reconnect_promise_when_lm_studio_is_gone()
     test_reconnect_is_announced_when_lm_studio_is_still_up()
+    test_failed_port_cleanup_is_escalated()
+    test_successful_port_cleanup_is_not_escalated()
     print("=" * 60)
     print("ALL TESTS PASSED")
     print("=" * 60)

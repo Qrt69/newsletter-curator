@@ -153,29 +153,55 @@ def health_check() -> bool:
     return result.stdout.strip() == "200"
 
 
+# Kept out of free_remote_port() as a plain string so the shell's own braces do
+# not have to be escaped for an f-string. The port is prepended as `port=N`.
+_FREE_PORT_SCRIPT = """
+bound() { ss -tln "sport = :$port" 2>/dev/null | grep -q ":$port"; }
+
+bound || { echo NO_LISTENER; exit 0; }
+
+me=$(ps -o ppid= -p $$ | tr -d ' ')
+
+# ss only prints pid= for a socket it can attribute, and an unprivileged user
+# cannot attribute our own sshd session -- the Process column comes back empty.
+# An empty list therefore means "owner not visible", not "no owner", and must
+# not be treated as nothing-to-do: that is what made every cleanup a no-op.
+pids=$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
+if [ -n "$pids" ]; then
+    kill $pids 2>/dev/null
+    sleep 2
+    bound && { kill -9 $pids 2>/dev/null; sleep 1; }
+    bound && echo STILL_BOUND || echo FREED
+    exit 0
+fi
+
+# Fall back to our own idle sshd sessions: the only thing that ever binds this
+# port is this tunnel, so the holder is one of them. Oldest first and one at a
+# time, stopping as soon as the port comes free -- killing the whole list would
+# take down sessions that were never the problem. Never touch the session that
+# is running this script.
+cands=$(ps -eo pid,etimes,args | grep "sshd: $(id -un)@notty" | grep -v grep \
+        | sort -k2 -nr | awk '{print $1}' | grep -vx "$me" | head -25)
+[ -z "$cands" ] && { echo UNATTRIBUTABLE; exit 0; }
+for p in $cands; do
+    kill "$p" 2>/dev/null
+    sleep 1
+    bound || { echo FREED; exit 0; }
+done
+bound && echo STILL_BOUND || echo FREED
+"""
+
+
 def free_remote_port() -> str:
     """
     Kill whatever holds REMOTE_PORT on the VPS (a stale sshd session).
 
-    Returns one of: NO_LISTENER, FREED, STILL_BOUND, ERROR.
+    Returns one of: NO_LISTENER, FREED, STILL_BOUND, UNATTRIBUTABLE, ERROR.
     """
     port = REMOTE_PORT
-    script = f"""
-    pids=$(ss -tlnp "sport = :{port}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)
-    if [ -z "$pids" ]; then
-        ss -tln "sport = :{port}" 2>/dev/null | grep -q ":{port}" && echo FOREIGN_LISTENER || echo NO_LISTENER
-        exit 0
-    fi
-    kill $pids 2>/dev/null
-    sleep 2
-    if ss -tln "sport = :{port}" 2>/dev/null | grep -q ":{port}"; then
-        kill -9 $pids 2>/dev/null
-        sleep 1
-    fi
-    ss -tln "sport = :{port}" 2>/dev/null | grep -q ":{port}" && echo STILL_BOUND || echo FREED
-    """
+    script = f"port={port}\n{_FREE_PORT_SCRIPT}"
     try:
-        result = _run_remote(script, timeout=40)
+        result = _run_remote(script, timeout=60)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("Could not clear remote port: %s", exc)
         return "ERROR"
@@ -319,7 +345,17 @@ def supervise():
         # The classic stale-session case: the port is still bound by a dead
         # sshd, so every retry would fail the same way until it is cleared.
         if "remote port forwarding failed" in output.lower():
-            free_remote_port()
+            status = free_remote_port()
+            if status not in ("FREED", "NO_LISTENER"):
+                # Retrying past this point is pointless: every attempt fails on
+                # the same bind. Say so loudly instead of logging an INFO line
+                # once a minute forever, which is how this went unnoticed.
+                logger.error(
+                    "Remote port %d is STILL BOUND after cleanup (%s) — the tunnel "
+                    "cannot come up until it is released. On the VPS: "
+                    "sudo ss -tlnp 'sport = :%d' and kill the owner.",
+                    REMOTE_PORT, status, REMOTE_PORT,
+                )
 
         if alive_for >= STABLE_AFTER:
             delay = RETRY_DELAY  # was healthy for a while; treat as a fresh start
