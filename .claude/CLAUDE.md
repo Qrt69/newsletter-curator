@@ -83,7 +83,7 @@ infra_reference   -> Infrastructure Knowledge Base
 - `Dockerfile`: python:3.13, caddy, redis, Playwright Chromium
 - `docker-compose.yml`: `web` container only (port 8080), shared volume for digest.db
 - `Caddyfile.docker`: Routes API/events to Reflex backend, static files from /srv
-- `start.sh`: Starts redis, caddy, reflex backend
+- `start.sh`: Starts redis, caddy, reflex backend, then a watchdog: if `/ping` (via Caddy) or Redis fails 3 checks in a row (60s apart) the script exits, so `restart: unless-stopped` restarts the container. Before this, a dead backend left the page loading with "websocket error" until a manual stop/start. Restarts are logged to `/data/watchdog.log`.
 
 **There is no scheduler. Runs are started by hand from the UI.** The `scheduler` service
 still exists in `docker-compose.yml` but sits behind `profiles: ["scheduler"]`, so
