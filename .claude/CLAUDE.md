@@ -83,7 +83,7 @@ infra_reference   -> Infrastructure Knowledge Base
 - `Dockerfile`: python:3.13, caddy, redis, Playwright Chromium
 - `docker-compose.yml`: `web` container only (port 8080), shared volume for digest.db
 - `Caddyfile.docker`: Routes API/events to Reflex backend, static files from /srv
-- `start.sh`: Starts redis, caddy, reflex backend, then a watchdog: if `/ping` (via Caddy) or Redis fails 3 checks in a row (60s apart) the script exits, so `restart: unless-stopped` restarts the container. Before this, a dead backend left the page loading with "websocket error" until a manual stop/start. Restarts are logged to `/data/watchdog.log`.
+- `start.sh`: Starts redis, caddy, reflex backend, then a watchdog: if `/ping` (via Caddy), Redis, or a real websocket handshake on `/_event` (`scripts/ws_probe.py`, stdlib only) fails 3 checks in a row (60s apart) the script exits, so `restart: unless-stopped` restarts the container. Before this, a dead backend left the page loading with "websocket error" until a manual stop/start. Restarts are logged to `/data/watchdog.log`. The websocket check was added after 2026-10-21, when `/ping` kept answering 200 for days while the page showed "websocket error" and the container sat at 100% CPU. While a pipeline run's process is alive, a failing websocket is only logged, so a restart never kills a run half-way.
 
 **There is no scheduler. Runs are started by hand from the UI.** The `scheduler` service
 still exists in `docker-compose.yml` but sits behind `profiles: ["scheduler"]`, so
