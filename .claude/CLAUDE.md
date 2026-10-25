@@ -93,6 +93,15 @@ moves the emails to "Processed" without anyone reviewing them. It also cannot wo
 unattended, because LM Studio is only switched on for a run. Do not re-enable it, and do
 not "fix" its absence.
 
+## Scorer Backend: Claude or LM Studio
+`SCORER_BACKEND` in `.env` picks the scorer: `local` (LM Studio on the laptop, via the SSH
+tunnel) or `anthropic` (Claude API, laptop not needed). `docker-compose.yml` reads it as
+`${SCORER_BACKEND:-local}`. Switch with `sudo bash scripts/scorer_backend.sh claude|local`,
+which edits `.env`, rebuilds `web` and tests the API. Claude model: `ANTHROPIC_MODEL`
+(default `claude-haiku-5-5`). In `anthropic` mode a non-`claude*` model name from the UI's
+LM Studio dropdown is ignored. Switched to Claude on 2026-10-25 after LM Studio fell to
+~1 token/s (vs 11-23 normally) with unchanged settings.
+
 ## CLI Usage
 ```bash
 uv run python scripts/run_weekly.py                # Run pipeline once

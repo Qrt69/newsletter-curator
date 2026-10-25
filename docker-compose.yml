@@ -25,7 +25,7 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/data
-      - SCORER_BACKEND=local
+      - SCORER_BACKEND=${SCORER_BACKEND:-local}
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
       - SKIP_BROWSER_LOGIN=1
     volumes:
@@ -52,7 +52,7 @@ services:
     env_file: .env
     environment:
       - DATA_DIR=/data
-      - SCORER_BACKEND=local
+      - SCORER_BACKEND=${SCORER_BACKEND:-local}
       - LLM_BASE_URL=http://172.17.0.1:11234/v1
       - SKIP_BROWSER_LOGIN=1
     volumes:

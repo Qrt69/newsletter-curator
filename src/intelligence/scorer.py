@@ -73,7 +73,11 @@ class Scorer:
                 )
             self._anthropic_client = anthropic.Anthropic(api_key=key)
             self._openai_client = None
-            self._model = model or "claude-sonnet-4-5-20250929"
+            # The web UI passes the model picked from LM Studio's list (e.g.
+            # "qwen2.5-14b-instruct"); that name means nothing to the Claude API.
+            if not (model and model.startswith("claude")):
+                model = None
+            self._model = model or os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5")
         else:
             # Local (LM Studio / OpenAI-compatible)
             base_url = os.environ.get("LLM_BASE_URL", _DEFAULT_LLM_BASE_URL)
