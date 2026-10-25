@@ -42,7 +42,7 @@ class FakeLLM:
         if self.down:
             raise httpx.ConnectError("down", request=request)
         if request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": "fake-model"}]})
+            return httpx.Response(200, json={"data": [{"id": "qwen2.5-14b-instruct"}, {"id": "other-model"}]})
         body = json.loads(request.content)
         schema_name = body.get("response_format", {}).get("json_schema", {}).get("name")
         user = body["messages"][1]["content"]
@@ -79,4 +79,4 @@ class FakeGitHub:
 def cfg(tmp_path):
     vault = tmp_path / "vault"
     vault.mkdir()
-    return config_mod.load(vault_override=vault)
+    return config_mod.load(cfg_dir=config_mod.PACKAGE_CONFIG, vault_override=vault)

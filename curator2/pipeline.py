@@ -44,9 +44,9 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
     vault.prepare()
     run_id, resumed = state.open_run(today.isoformat())
     run_date = state.run_date(run_id)
-    c = {"mails": 0, "items": 0, "dubbel": 0, "regels": 0, "niet_leesbaar": 0,
-         "beoordeeld": 0, "niet_beoordeeld": 0, "toppers": 0, "repos": 0, "gewoon_bewaard": 0,
-         "zelfde_inhoud": 0, "verworpen": 0, "opgewaardeerd": 0, "opgeruimd": 0}
+    c = {"mails": 0, "mails_overgeslagen": 0, "items": 0, "dubbel": 0, "regels": 0,
+         "niet_leesbaar": 0, "beoordeeld": 0, "niet_beoordeeld": 0, "toppers": 0, "repos": 0,
+         "gewoon_bewaard": 0, "zelfde_inhoud": 0, "verworpen": 0, "opgewaardeerd": 0, "opgeruimd": 0}
     if resumed:
         progress(f"Onderbroken run van {run_date} wordt verdergezet.")
 
@@ -60,16 +60,71 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
     # 1. Upgrades Kurt ticked in earlier Verworpen lists.
     c["opgewaardeerd"] = _apply_upgrades(cfg, judge, state, vault, run_date, github, progress)
 
-    # 2. Mails.
-    emails = await source.fetch()
-    c["mails"] = len(emails)
-    if not emails:
-        _finish(cfg, state, vault, run_id, run_date, today, c, "geen mails", progress)
-        return RunResult("geen mails", "Geen nieuwe mails in 'to qualify'.", c)
-    progress(f"{len(emails)} mails gevonden.")
+    # 2. The plan: every decision of this run, saved before anything is written,
+    #    so a resumed run carries out the same decisions instead of making new ones.
+    saved = state.load_plan(run_id)
+    if saved is None:
+        emails = await source.fetch()
+        c["mails"] = len(emails)
+        if not emails:
+            _finish(cfg, state, vault, run_id, run_date, today, c, "geen mails", progress)
+            return RunResult("geen mails", "Geen nieuwe mails in 'to qualify'.", c)
+        progress(f"{len(emails)} mails gevonden.")
+        built = await _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress)
+        if isinstance(built, RunResult):
+            return built
+        rows = built
+        state.save_plan(run_id, rows, c)
+    else:
+        rows, saved_counts = saved
+        c.update(saved_counts)
+        progress("Het plan van de onderbroken run wordt verder uitgevoerd.")
 
-    # 3. Read every link (cached per email for a resumed run).
-    raw: list[tuple[dict, str, str]] = []  # (item, source name, email id)
+    # 3. Carry out the plan: notes for kept items, entries for rejected ones.
+    #    Each item is recorded as done right after it is written.
+    for r in rows:
+        if r.get("done"):
+            continue
+        key, it, answers = r["key"], r["item"], r["answers"]
+        if r["keep"]:
+            path = vault.write_item(
+                key=key, url=it.get("resolved_url") or it.get("source_url") or "",
+                answers=answers, source=it.get("_source", ""), run_date=run_date,
+                points=r.get("score", 0), topper=r["lane"] == "topper", novelty=r.get("novelty", ""),
+                repo_meta=r.get("repo_meta"))
+            topic = answers.get("topic", "").strip().lower()
+            if topic:
+                state.add_topic_entry(topic, key, answers["title"], answers.get("description_nl", ""), path.stem)
+            state.mark_seen(key, "bewaard", path.stem)
+        else:
+            state.add_rejected(rid_for(key), key, it, answers or None, r["reason"], run_date)
+            state.mark_seen(key, "verworpen")
+        state.plan_done(run_id, key)
+        state.commit()
+    vault.write_rejected(run_date, state.rejected_for_date(run_date))
+
+    # 4. Only now: move the emails.
+    moved = 0
+    for eid in c.get("_ok_emails", []):
+        try:
+            await source.move(eid)
+            moved += 1
+        except Exception as exc:
+            log.warning("Could not move email %s: %s", eid, exc)
+    c["verplaatst"] = moved
+
+    _finish(cfg, state, vault, run_id, run_date, today, c, "klaar", progress)
+    return RunResult("klaar", "", c)
+
+
+_EXTRACT_FAILED = ("redirect_failed", "process_failed", "fetch_failed")
+MAIL_RETRIES = 3   # a mail whose articles cannot be read is held back this many nights
+ITEM_RETRIES = 3   # an item the model cannot judge is retried this many nights
+
+
+async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress):
+    # Read every link (cached per email for a resumed run).
+    raw: list[tuple[dict, str]] = []  # (item, source name)
     ok_emails: list[str] = []
     for i, e in enumerate(emails, 1):
         items = state.get_extracted(run_id, e["id"])
@@ -79,20 +134,35 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
                 items = source.extract(e)
             except Exception as exc:
                 log.warning("Extraction failed for %s: %s", e.get("subject"), exc)
-                progress(f"  Kon deze mail niet lezen; ze blijft staan voor de volgende run.")
+                progress("  Kon deze mail niet lezen; ze blijft staan voor de volgende run.")
+                c["mails_overgeslagen"] += 1
+                continue
+            bad = sum(1 for it in items if it.get("extraction_status") in _EXTRACT_FAILED)
+            if len(items) >= 4 and bad / len(items) > 0.5 and state.bump_failure("mail:" + e["id"]) < MAIL_RETRIES:
+                progress(f"  {bad} van {len(items)} artikels niet leesbaar; de mail blijft staan "
+                         "en wordt morgen opnieuw geprobeerd.")
+                c["mails_overgeslagen"] += 1
                 continue
             state.put_extracted(run_id, e["id"], items)
         ok_emails.append(e["id"])
+        src = _source_name(e)
         for it in items:
-            raw.append((it, _source_name(e), e["id"]))
+            raw.append((it, src))
     c["items"] = len(raw)
+    c["_ok_emails"] = ok_emails
 
-    # 4. Real duplicates, fixed rules, unreadable pages.
+    rows: list[dict] = []
+
+    def reject(it, key, answers, reason, why=""):
+        if why:
+            it["_why"] = why
+        rows.append({"key": key, "item": it, "answers": answers or {}, "keep": False, "reason": reason})
+
+    # Real duplicates, fixed rules, unreadable pages.
     known = vault.known_keys()
     seen_now: set[str] = set()
-    to_judge: list[tuple[dict, str, str]] = []  # (item, key, source)
-    rejected: list[tuple[dict, str, dict | None, str]] = []  # (item, key, answers, reason)
-    for it, src, _ in raw:
+    to_judge: list[tuple[dict, str]] = []
+    for it, src in raw:
         url = it.get("resolved_url") or it.get("source_url") or ""
         key = normalize(url)
         if not key:
@@ -105,21 +175,20 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
         broken = rules.check(it, cfg.rules)
         if broken:
             c["regels"] += 1
-            rejected.append((it, key, None, broken))
-            continue
-        if rules.unreadable(it):
+            reject(it, key, None, broken)
+        elif rules.unreadable(it):
             c["niet_leesbaar"] += 1
-            rejected.append((it, key, None, "niet leesbaar"))
-            continue
-        to_judge.append((it, key, src))
+            reject(it, key, None, "niet leesbaar")
+        else:
+            to_judge.append((it, key))
     progress(f"{c['items']} items: {c['dubbel']} dubbel, {c['regels']} door vaste regels, "
              f"{c['niet_leesbaar']} niet leesbaar, {len(to_judge)} te beoordelen.")
 
-    # 5. Judge (cached per link for a resumed run).
+    # Judge (cached per link for a resumed run).
     cands: list[Candidate] = []
-    failed: list[tuple[dict, str]] = []
+    retry_later = 0
     t0 = time.time()
-    for n, (it, key, src) in enumerate(to_judge, 1):
+    for n, (it, key) in enumerate(to_judge, 1):
         answers = state.get_judged(key)
         if answers is None:
             if n == 1 or n % 10 == 0:
@@ -130,38 +199,45 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
             except LLMUnavailable as exc:
                 return RunResult("onderbroken", f"LM Studio viel weg tijdens het beoordelen: {exc}", c)
             if answers is None:
-                failed.append((it, key))
+                if state.bump_failure(key) >= ITEM_RETRIES:
+                    c["niet_beoordeeld"] += 1
+                    reject(it, key, None, "kon niet beoordeeld worden")
+                else:
+                    retry_later += 1
                 continue
             state.put_judged(key, answers)
         c["beoordeeld"] += 1
-        repo = github_repo(it.get("resolved_url") or "")
-        cands.append(Candidate(item=it, key=key, answers=answers, is_repo=bool(repo),
-                               is_model=bool(huggingface_model(it.get("resolved_url") or ""))))
-    if to_judge and len(failed) / len(to_judge) > MAX_FAILED_SHARE:
-        return RunResult("onderbroken", f"{len(failed)} van {len(to_judge)} items konden niet "
+        url = it.get("resolved_url") or ""
+        cands.append(Candidate(item=it, key=key, answers=answers, is_repo=bool(github_repo(url)),
+                               is_model=bool(huggingface_model(url))))
+    if to_judge and retry_later / len(to_judge) > MAX_FAILED_SHARE:
+        return RunResult("onderbroken", f"{retry_later} van {len(to_judge)} items konden niet "
                                         "beoordeeld worden; de run gaat de volgende keer verder.", c)
-    for it, key in failed:
-        c["niet_beoordeeld"] += 1
-        rejected.append((it, key, None, "kon niet beoordeeld worden"))
+    if retry_later:
+        # A few stubborn items must not hold back the whole run: they go to Verworpen
+        # now and can be ticked; the model gets them again only if Kurt asks.
+        for it, key in to_judge:
+            if state.get_judged(key) is None and not any(r["key"] == key for r in rows):
+                c["niet_beoordeeld"] += 1
+                reject(it, key, None, "kon niet beoordeeld worden")
 
-    # 6. Never-keep categories (events).
-    keep_cands = []
+    # Never-keep categories (events).
+    remaining = []
     for cd in cands:
         if cd.answers["category"] in cfg.never_categories:
-            cd.item["_why"] = cd.answers.get("reason_nl", "")
-            rejected.append((cd.item, cd.key, cd.answers, "webinar of evenement"))
+            reject(cd.item, cd.key, cd.answers, "webinar of evenement", cd.answers.get("reason_nl", ""))
         else:
-            keep_cands.append(cd)
-    cands = keep_cands
+            remaining.append(cd)
+    cands = remaining
 
-    # 7. Repo vital signs (for toppers and the weekly review).
+    # Repo vital signs (for toppers and the weekly review).
     if github is not None:
         for cd in cands:
             repo = github_repo(cd.item.get("resolved_url") or "")
             if repo:
                 cd.repo_meta = github.repo(repo)
 
-    # 8. Lanes and the 10%.
+    # Lanes and the best share of the regular items.
     rank.assign_lanes(cands, cfg)
     keep: list[Candidate] = [cd for cd in cands if cd.lane in ("topper", "repo")]
     regular = rank.order([cd for cd in cands if cd.lane == "gewoon"])
@@ -170,8 +246,8 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
     run_topics: dict[str, list[dict]] = {}
     for cd in regular:
         if kept_regular >= quota:
-            cd.item["_why"] = f"{cd.answers.get('reason_nl', '')} ({cd.score:g} punten)".strip()
-            rejected.append((cd.item, cd.key, cd.answers, "niet bij de beste van de run"))
+            reject(cd.item, cd.key, cd.answers, "niet bij de beste van de run",
+                   f"{cd.answers.get('reason_nl', '')} ({cd.score:g} punten)".strip())
             continue
         topic = cd.answers.get("topic", "").strip().lower()
         earlier = (state.topic_entries(topic) + run_topics.get(topic, [])) if topic else []
@@ -182,8 +258,8 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
                 return RunResult("onderbroken", f"LM Studio viel weg: {exc}", c)
             if nv and nv["adds"] == "nee":
                 c["zelfde_inhoud"] += 1
-                cd.item["_why"] = f"zelfde inhoud als {earlier[0]['title']}"
-                rejected.append((cd.item, cd.key, cd.answers, "zelfde inhoud als eerder artikel"))
+                reject(cd.item, cd.key, cd.answers, "zelfde inhoud als eerder artikel",
+                       f"zelfde inhoud als {earlier[0]['title']}")
                 continue
             cd.novelty = (nv or {}).get("what_nl", "")
         if topic:
@@ -192,39 +268,12 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
         keep.append(cd)
         kept_regular += 1
 
-    # 9. Write kept items into OSK.
     for cd in keep:
-        topper = cd.lane == "topper"
-        path = vault.write_item(
-            key=cd.key, url=cd.item.get("resolved_url") or cd.item.get("source_url") or "",
-            answers=cd.answers, source=cd.item.get("_source", ""), run_date=run_date,
-            points=cd.score, topper=topper, novelty=cd.novelty, repo_meta=cd.repo_meta)
-        topic = cd.answers.get("topic", "").strip().lower()
-        if topic:
-            state.add_topic_entry(topic, cd.key, cd.answers["title"], cd.answers.get("description_nl", ""), path.stem)
-        state.mark_seen(cd.key, "bewaard", path.stem)
-        c["toppers" if topper else ("repos" if cd.lane == "repo" else "gewoon_bewaard")] += 1
-
-    # 10. Rejected list (rendered from the database, so a resumed run never loses entries).
-    for it, key, answers, reason in rejected:
-        state.add_rejected(rid_for(key), key, it, answers, reason, run_date)
-        state.mark_seen(key, "verworpen")
-    c["verworpen"] = len(rejected)
-    state.commit()
-    vault.write_rejected(run_date, state.rejected_for_date(run_date))
-
-    # 11. Only now: move the emails.
-    moved = 0
-    for eid in ok_emails:
-        try:
-            await source.move(eid)
-            moved += 1
-        except Exception as exc:
-            log.warning("Could not move email %s: %s", eid, exc)
-    c["verplaatst"] = moved
-
-    _finish(cfg, state, vault, run_id, run_date, today, c, "klaar", progress)
-    return RunResult("klaar", "", c)
+        rows.append({"key": cd.key, "item": cd.item, "answers": cd.answers, "keep": True,
+                     "lane": cd.lane, "score": cd.score, "novelty": cd.novelty, "repo_meta": cd.repo_meta})
+        c["toppers" if cd.lane == "topper" else ("repos" if cd.lane == "repo" else "gewoon_bewaard")] += 1
+    c["verworpen"] = sum(1 for r in rows if not r["keep"])
+    return rows
 
 
 def _apply_upgrades(cfg: Config, judge: Judge, state: State, vault: Vault, run_date: str,
@@ -233,10 +282,15 @@ def _apply_upgrades(cfg: Config, judge: Judge, state: State, vault: Vault, run_d
     if not ticked:
         return 0
     done: dict = {}
+    new_count = 0
     for path, rid in ticked:
         rec = state.get_rejected(rid)
         if not rec:
             continue
+        if rec.get("upgraded"):  # done before; only the marker in the list was missing
+            done.setdefault(path, set()).add(rid)
+            continue
+        new_count += 1
         it, answers = rec["item"], rec["answers"]
         if not answers:  # rejected by a fixed rule: never judged, so judge it now
             try:
@@ -244,6 +298,7 @@ def _apply_upgrades(cfg: Config, judge: Judge, state: State, vault: Vault, run_d
             except LLMUnavailable:
                 answers = None
             if not answers:
+                new_count -= 1
                 continue
         if answers["category"] in cfg.never_categories:
             answers = dict(answers, category="article")
@@ -259,7 +314,7 @@ def _apply_upgrades(cfg: Config, judge: Judge, state: State, vault: Vault, run_d
     state.commit()
     for path, rids in done.items():
         vault.mark_upgraded(path, rids)
-    n = sum(len(r) for r in done.values())
+    n = new_count
     if n:
         progress(f"{n} aangevinkte items opgewaardeerd.")
     return n

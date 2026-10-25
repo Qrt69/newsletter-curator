@@ -114,16 +114,23 @@ def _parse(raw: str) -> dict | None:
     if raw.startswith("```"):
         raw = raw.strip("`")
         raw = raw[raw.find("{"):]
+    v = None
     try:
-        return json.loads(raw)
+        v = json.loads(raw)
     except (ValueError, TypeError):
-        pass
-    try:
-        from json_repair import repair_json
-        v = repair_json(raw, return_objects=True)
-        return v if isinstance(v, dict) else None
-    except Exception:
-        return None
+        try:
+            from json_repair import repair_json
+            v = repair_json(raw, return_objects=True)
+        except Exception:
+            v = None
+    if isinstance(v, list) and len(v) == 1:
+        v = v[0]
+    return v if isinstance(v, dict) else None
+
+
+def _safe(s) -> str:
+    """Text that SQLite and the vault can store (broken emoji halves replaced)."""
+    return " ".join(str(s or "").encode("utf-8", "replace").decode("utf-8").split())
 
 
 def _pick(v, allowed: list[str], default: str) -> str:
@@ -149,21 +156,21 @@ def clean_answers(a: dict, categories: list[str], item: dict) -> dict:
     except (TypeError, ValueError):
         fit = 1
     fit = max(1, min(5, fit))
-    title = str(a.get("title") or "").strip() or (item.get("title") or item.get("link_text") or "Zonder titel")
+    title = _safe(a.get("title")) or _safe(item.get("title") or item.get("link_text")) or "Zonder titel"
     new_cat = a.get("new_category")
     return {
         "title": title[:150],
-        "description_nl": str(a.get("description_nl") or "").strip()[:600],
+        "description_nl": _safe(a.get("description_nl"))[:600],
         "category": cat,
-        "new_category": (str(new_cat).strip()[:60] or None) if new_cat else None,
+        "new_category": (_safe(new_cat)[:60] or None) if new_cat else None,
         "kind": _pick(a.get("kind"), KINDS, "other"),
-        "topic": str(a.get("topic") or "").strip()[:60],
+        "topic": _safe(a.get("topic"))[:60],
         "usable": _pick(a.get("usable"), YN, "nee"),
         "fits": _pick(a.get("fits"), YPN, "nee"),
         "junk": _pick(a.get("junk"), YN, "nee"),
         "topper": _pick(a.get("topper"), YN, "nee"),
         "fit": fit,
-        "reason_nl": str(a.get("reason_nl") or "").strip()[:400],
+        "reason_nl": _safe(a.get("reason_nl"))[:400],
     }
 
 
@@ -214,6 +221,15 @@ class Judge:
                     continue
         if available is None:
             raise LLMUnavailable("LM Studio antwoordt niet op " + self.cfg.llm_url)
+        if self.model and self.model not in available:
+            _start_lmstudio(self.model)  # loads it, if LM Studio's command-line tool is there
+            try:
+                available = self.models()
+            except httpx.HTTPError:
+                available = []
+            if self.model not in available:
+                raise LLMUnavailable(f"model '{self.model}' staat niet in LM Studio "
+                                     f"(beschikbaar: {', '.join(available) or 'geen'})")
         if not self.model:
             if not available:
                 raise LLMUnavailable("LM Studio heeft geen model geladen")
@@ -221,7 +237,8 @@ class Judge:
         return self.model
 
     # ── calls ───────────────────────────────────────────────────
-    def _chat(self, system: str, user: str, schema: dict, name: str, max_tokens: int) -> dict | None:
+    def _chat(self, system: str, user: str, schema: dict, name: str, max_tokens: int,
+              required: tuple[str, ...]) -> dict | None:
         body = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -237,19 +254,25 @@ class Judge:
             self.calls += 1
             try:
                 r = self.client.post("/chat/completions", json=body)
-                if r.status_code == 400 and "response_format" in body:
-                    # Older server without structured output: ask for plain JSON instead.
+                if r.status_code == 400 and "response_format" in body and (
+                        "response_format" in r.text or "json_schema" in r.text or "schema" in r.text.lower()):
+                    # Server without structured output: ask for plain JSON instead.
                     self._schema_ok = False
                     body.pop("response_format")
                     continue
                 r.raise_for_status()
-                content = r.json()["choices"][0]["message"].get("content") or ""
-                parsed = _parse(content)
-                if parsed is not None:
+                choice = r.json()["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    log.warning("LLM answer cut off at %d tokens", max_tokens)
+                    body["max_tokens"] = max_tokens * 2
+                    continue
+                parsed = _parse(choice["message"].get("content") or "")
+                if parsed is not None and all(k in parsed for k in required):
                     return parsed
+                log.warning("LLM answer incomplete or not JSON (attempt %d)", attempt + 1)
             except httpx.ConnectError as exc:
                 raise LLMUnavailable(str(exc)) from exc
-            except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+            except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError) as exc:
                 log.warning("LLM call failed (attempt %d): %s", attempt + 1, exc)
             time.sleep(1 + attempt)
         self.failures += 1
@@ -273,7 +296,8 @@ class Judge:
             n=self.cfg.max_text,
             text=text,
         )
-        a = self._chat(system, user, _schema(self.categories), "item_answers", 600)
+        a = self._chat(system, user, _schema(self.categories), "item_answers", 600,
+                       ("category", "usable", "fits", "junk", "fit"))
         return clean_answers(a, self.categories, item) if a is not None else None
 
     def novelty(self, topic: str, earlier: list[dict], title: str, text: str) -> dict | None:
@@ -281,10 +305,10 @@ class Judge:
         user = NOVELTY_USER.format(
             topic=topic, earlier=lines, title=title, text=(text or "")[: self.cfg.max_text]
         )
-        a = self._chat(NOVELTY_SYSTEM, user, _NOVELTY_SCHEMA, "novelty", 200)
+        a = self._chat(NOVELTY_SYSTEM, user, _NOVELTY_SCHEMA, "novelty", 200, ("adds",))
         if a is None:
             return None
-        return {"adds": _pick(a.get("adds"), YN, "ja"), "what_nl": str(a.get("what_nl") or "").strip()[:300]}
+        return {"adds": _pick(a.get("adds"), YN, "ja"), "what_nl": _safe(a.get("what_nl"))[:300]}
 
 
 def _lms_path() -> str | None:

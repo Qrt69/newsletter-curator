@@ -17,7 +17,9 @@ _TRACKING = re.compile(
 _GITHUB_RESERVED = {
     "orgs", "users", "topics", "collections", "trending", "marketplace", "sponsors",
     "features", "about", "pricing", "login", "join", "settings", "search", "explore",
-    "apps", "enterprise", "customer-stories", "readme", "events", "site",
+    "apps", "enterprise", "customer-stories", "readme", "events", "site", "resources",
+    "solutions", "security", "copilot", "codespaces", "team", "contact", "new",
+    "notifications", "premium-support", "partners", "mobile", "newsroom",
 }
 
 

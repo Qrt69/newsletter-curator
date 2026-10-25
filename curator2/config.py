@@ -7,7 +7,22 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_DIR = Path(os.environ.get("CURATOR2_CONFIG", Path(__file__).parent / "config"))
+PACKAGE_CONFIG = Path(__file__).parent / "config"
+
+
+def config_dir() -> Path:
+    """
+    Kurt's own copy wins: C:\\Dev\\curator2-instellingen (next to the program folder),
+    so updating the program never overwrites his edits. The copy inside the
+    package is only the starting point.
+    """
+    env = os.environ.get("CURATOR2_CONFIG")
+    if env:
+        return Path(env)
+    own = Path(__file__).resolve().parent.parent.parent / "curator2-instellingen"
+    if (own / "instellingen.toml").exists():
+        return own
+    return PACKAGE_CONFIG
 
 
 @dataclass
@@ -45,13 +60,13 @@ class Config:
         return self.vault / self.folder
 
 
-def _read(name: str, config_dir: Path) -> dict:
-    with open(config_dir / name, "rb") as f:
+def _read(name: str, folder: Path) -> dict:
+    with open(folder / name, "rb") as f:
         return tomllib.load(f)
 
 
-def load(config_dir: Path | None = None, vault_override: Path | None = None) -> Config:
-    d = Path(config_dir or CONFIG_DIR)
+def load(cfg_dir: Path | None = None, vault_override: Path | None = None) -> Config:
+    d = Path(cfg_dir) if cfg_dir else config_dir()
     s = _read("instellingen.toml", d)
     r = _read("regels.toml", d)
     b = _read("beoordeling.toml", d)

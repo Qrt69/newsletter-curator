@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS rejected (
 CREATE TABLE IF NOT EXISTS upgrades (
     rid TEXT PRIMARY KEY, source TEXT, category TEXT, reason TEXT, at REAL
 );
+CREATE TABLE IF NOT EXISTS plan (
+    run_id INTEGER, key TEXT, item TEXT, answers TEXT, keep INTEGER, lane TEXT,
+    score REAL, novelty TEXT, reason TEXT, repo_meta TEXT, done INTEGER DEFAULT 0,
+    PRIMARY KEY (run_id, key)
+);
+CREATE TABLE IF NOT EXISTS plan_counts (run_id INTEGER PRIMARY KEY, counts TEXT);
+CREATE TABLE IF NOT EXISTS failures (key TEXT PRIMARY KEY, n INTEGER);
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, started REAL, finished REAL,
     run_date TEXT, status TEXT, summary TEXT
@@ -80,6 +87,8 @@ class State:
             (time.time(), status, json.dumps(summary, ensure_ascii=False), run_id),
         )
         self.db.execute("DELETE FROM extracted WHERE run_id = ?", (run_id,))
+        self.db.execute("DELETE FROM plan WHERE run_id = ?", (run_id,))
+        self.db.execute("DELETE FROM plan_counts WHERE run_id = ?", (run_id,))
         self.db.commit()
 
     # ── extraction cache ────────────────────────────────────────
@@ -107,6 +116,42 @@ class State:
             (key, json.dumps(answers, ensure_ascii=False), time.time()),
         )
         self.db.commit()
+
+    # ── the run's plan: every decision, saved before anything is written ──
+    def save_plan(self, run_id: int, rows: list[dict], counts: dict):
+        self.db.executemany(
+            "INSERT OR REPLACE INTO plan (run_id, key, item, answers, keep, lane, score, novelty, "
+            "reason, repo_meta, done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            [(run_id, r["key"], json.dumps(r["item"], ensure_ascii=False, default=str),
+              json.dumps(r.get("answers") or {}, ensure_ascii=False), int(r["keep"]), r.get("lane", ""),
+              float(r.get("score", 0)), r.get("novelty", ""), r.get("reason", ""),
+              json.dumps(r.get("repo_meta")) if r.get("repo_meta") else "") for r in rows],
+        )
+        self.db.execute("INSERT OR REPLACE INTO plan_counts VALUES (?, ?)",
+                        (run_id, json.dumps(counts, ensure_ascii=False)))
+        self.db.commit()
+
+    def load_plan(self, run_id: int) -> tuple[list[dict], dict] | None:
+        c = self.db.execute("SELECT counts FROM plan_counts WHERE run_id = ?", (run_id,)).fetchone()
+        if not c:
+            return None
+        rows = []
+        for r in self.db.execute("SELECT * FROM plan WHERE run_id = ? ORDER BY rowid", (run_id,)):
+            d = dict(r)
+            d["item"] = json.loads(d["item"])
+            d["answers"] = json.loads(d["answers"])
+            d["repo_meta"] = json.loads(d["repo_meta"]) if d["repo_meta"] else None
+            rows.append(d)
+        return rows, json.loads(c[0])
+
+    def plan_done(self, run_id: int, key: str):
+        self.db.execute("UPDATE plan SET done = 1 WHERE run_id = ? AND key = ?", (run_id, key))
+
+    # ── items or mails that keep failing ────────────────────────
+    def bump_failure(self, key: str) -> int:
+        self.db.execute("INSERT INTO failures VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET n = n + 1", (key,))
+        self.db.commit()
+        return self.db.execute("SELECT n FROM failures WHERE key = ?", (key,)).fetchone()[0]
 
     # ── duplicates ──────────────────────────────────────────────
     def is_seen(self, key: str) -> bool:
@@ -137,7 +182,8 @@ class State:
     # ── rejected + upgrades ─────────────────────────────────────
     def add_rejected(self, rid: str, key: str, item: dict, answers: dict | None, reason: str, run_date: str):
         self.db.execute(
-            "INSERT OR REPLACE INTO rejected VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            "INSERT INTO rejected VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT(rid) DO UPDATE SET "
+            "item = excluded.item, answers = excluded.answers, reason = excluded.reason",
             (rid, key, json.dumps(item, ensure_ascii=False, default=str),
              json.dumps(answers or {}, ensure_ascii=False), reason, run_date),
         )
@@ -153,7 +199,7 @@ class State:
 
     def rejected_for_date(self, run_date: str) -> list[dict]:
         rows = self.db.execute(
-            "SELECT rid, item, answers, reason FROM rejected WHERE run_date = ? ORDER BY rowid",
+            "SELECT rid, item, answers, reason, upgraded FROM rejected WHERE run_date = ? ORDER BY rowid",
             (run_date,),
         ).fetchall()
         out = []
@@ -167,6 +213,7 @@ class State:
                 "reason": r["reason"],
                 "why": item.get("_why", ""),
                 "source": item.get("_source", ""),
+                "upgraded": r["upgraded"] is not None,
             })
         return out
 

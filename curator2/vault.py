@@ -35,10 +35,20 @@ def _q(v) -> str:
     return json.dumps(str(v), ensure_ascii=False)
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))}
+
+
+def one_line(s) -> str:
+    return " ".join(str(s or "").split())
+
+
 def slug(title: str) -> str:
     s = _BAD.sub(" ", title or "").strip()
     s = re.sub(r"\s+", " ", s).strip(" .")
-    return (s or "Zonder titel")[:90].rstrip(" .")
+    s = (s or "Zonder titel")[:90].rstrip(" .")
+    if s.split(".")[0].strip().upper() in _RESERVED:  # Windows device names
+        s = s + " (notitie)"
+    return s
 
 
 class Vault:
@@ -79,7 +89,10 @@ class Vault:
         category = self.cfg.categories.get(cat_key, cat_key)
         name = slug(answers["title"])
         path = self.items / f"{name}.md"
-        if path.exists() and f'sleutel: {_q(key)}' not in path.read_text(encoding="utf-8", errors="ignore")[:3000]:
+        for candidate in (path, self.items / f"{name} ({rid_for(key)[:6]}).md"):
+            if candidate.exists() and f"sleutel: {_q(key)}" in candidate.read_text(encoding="utf-8", errors="ignore")[:3000]:
+                return candidate  # already written: never overwrite Kurt's or the review's edits
+        if path.exists():
             path = self.items / f"{name} ({rid_for(key)[:6]}).md"
         props = {
             "titel": answers["title"],
@@ -114,7 +127,7 @@ class Vault:
             props["repo_oordeel"] = ""
             props["repo_reden"] = ""
         lines = ["---"] + [f"{k}: {_q(v)}" for k, v in props.items()] + ["tags:", "  - curator", "---", ""]
-        lines.append(f"# {answers['title']}")
+        lines.append(f"# {one_line(answers['title'])}")
         lines.append("")
         if answers.get("description_nl"):
             lines.append(answers["description_nl"])
@@ -150,11 +163,13 @@ class Vault:
             out.append(f"## {reason} ({len(by_reason[reason])})")
             out.append("")
             for e in by_reason[reason]:
-                box = "x" if e["rid"] in ticked_before else " "
-                title = e["title"].replace("[", "(").replace("]", ")")
-                src = f" · {e['source']}" if e.get("source") else ""
-                why = f" — {e['why']}" if e.get("why") else ""
-                out.append(f"- [{box}] [{title}]({e['url']}){why}{src} %%rid:{e['rid']}%%")
+                box = "x" if (e["rid"] in ticked_before or e.get("upgraded")) else " "
+                title = one_line(e["title"]).replace("[", "(").replace("]", ")")
+                url = one_line(e["url"]).replace(" ", "%20").replace(")", "%29")
+                src = f" · {one_line(e['source'])}" if e.get("source") else ""
+                why = f" — {one_line(e['why'])}" if e.get("why") else ""
+                done = " · opgewaardeerd" if e.get("upgraded") else ""
+                out.append(f"- [{box}] [{title}]({url}){why}{src}{done} %%rid:{e['rid']}%%")
             out.append("")
         path.write_text("\n".join(out), encoding="utf-8")
 
