@@ -67,13 +67,16 @@ ACTIVE="$(docker compose exec -T web printenv SCORER_BACKEND || true)"
 echo "Scorer staat nu op: ${ACTIVE}"
 
 if [ "$BACKEND" = anthropic ]; then
-  echo "Test: een korte vraag aan Claude..."
+  echo "Test: dezelfde testvraag die de curator zelf stelt..."
+  # Goes through the curator's own Scorer, so the test sends exactly what a run
+  # sends. (A bare API call passed on 2026-10-25 while every run failed on a
+  # parameter only the Scorer added.)
   if docker compose exec -T web uv run python -c '
-import os, anthropic
-m = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5")
-r = anthropic.Anthropic().messages.create(model=m, max_tokens=10,
-    messages=[{"role": "user", "content": "Antwoord enkel: OK"}])
-print("Claude (" + m + ") antwoordt:", r.content[0].text.strip())
+import sys; sys.path.insert(0, ".")
+from src.intelligence.scorer import Scorer
+s = Scorer()
+s.preflight_check()
+print("Claude (" + s._model + ") antwoordt: OK")
 '; then
     echo "KLAAR. Start een run in de curator; je laptop hoeft niet aan te staan."
   else

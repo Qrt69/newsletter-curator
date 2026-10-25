@@ -193,15 +193,16 @@ class Scorer:
             (raw_text, input_tokens, output_tokens)
         """
         if self._backend == "anthropic":
+            # No temperature: current Claude models reject it ("deprecated
+            # for this model", HTTP 400), which aborted every run at preflight.
             response = self._anthropic_client.messages.create(
                 model=self._model,
                 max_tokens=512,
-                temperature=0.2,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             )
             return (
-                response.content[0].text,
+                "".join(b.text for b in response.content if getattr(b, "type", "") == "text"),
                 response.usage.input_tokens,
                 response.usage.output_tokens,
             )
