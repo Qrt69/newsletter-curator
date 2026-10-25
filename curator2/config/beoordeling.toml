@@ -1,0 +1,57 @@
+# Hoe items beoordeeld worden.
+#
+# Het taalmodel geeft geen cijfer, maar beantwoordt vaste vragen. Het programma
+# telt daarna de punten hieronder op en houdt de beste items van de run.
+# Pas gerust profiel, vragen of punten aan.
+
+profiel = """
+Kurt is een functionele ERP-consultant (Business Central, Dynamics 365 F&O, finance)
+die kleine technische experimenten doet met Python en AI.
+Interesse: AI-agents en workflows, Python-bibliotheken, DuckDB, RAG en kennisgrafen,
+lokale LLM's, machine learning en deep learning, grafentheorie, AI-codeertools,
+AI-productiviteitstools, PostgreSQL, statistiek, Obsidian en kennisbeheer.
+Tools op de grens tussen functioneel en technisch zijn relevant: Microsoft Fabric,
+Power BI, Databricks, Foundry en vergelijkbaar.
+Niet relevant: zware tools voor grote ontwikkelteams (bijvoorbeeld Blitzy, Kubernetes-
+operators, enterprise CI/CD), vakspecifieke tools voor andere sectoren (vastgoed, HR,
+juridisch), pure consumenten-AI, frontend-frameworks, te basale inhoud ("wat is AI?").
+"""
+
+# Punten per antwoord.
+[punten.bruikbaar]
+ja = 2
+nee = 0
+
+[punten.past]
+ja = 3
+deels = 1
+nee = -3
+
+[punten.rommel]
+ja = -4
+nee = 0
+
+# De fit (1 tot 5) telt mee met dit gewicht; zo worden gelijke items gerangschikt.
+[punten]
+fit_gewicht = 1
+
+# Categorieën: de sleutel links is wat het model kiest, rechts de naam in OSK.
+[categorieen]
+python_library = "Python-bibliotheken"
+duckdb_extension = "DuckDB-extensies"
+ai_tool = "AI-tools"
+agent_workflow = "Agents en workflows"
+model_release = "Modellen"
+platform_infra = "Platformen en infrastructuur"
+concept_pattern = "Concepten en patronen"
+coding_tool = "AI-codeertools"
+vibe_coding_tool = "Vibe-codingtools"
+ai_architecture = "AI-architectuur"
+infra_reference = "Infrastructuurkennis"
+article = "Artikels"
+book_paper = "Boeken en papers"
+event = "Evenementen"
+
+# Categorieën die nooit bewaard worden.
+[nooit]
+categorieen = ["event"]

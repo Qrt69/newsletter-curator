@@ -93,6 +93,29 @@ moves the emails to "Processed" without anyone reviewing them. It also cannot wo
 unattended, because LM Studio is only switched on for a run. Do not re-enable it, and do
 not "fix" its absence.
 
+## Curator 2.0 (branch `v2`, folder `curator2/`)
+
+Rebuild agreed with Kurt on 2026-10-25; design doc: "Curator 2.0 — ontwerp" (Claude Docs).
+Runs on the laptop only (no VPS, no tunnel, no Notion, no web UI), every evening at 20:00
+via a Windows scheduled task (`curator2/install.ps1`, installs to `C:\Dev\curator2`).
+Reuses `src/email` (Graph fetcher, extractor, BrowserPool) unchanged.
+
+- Flow (`pipeline.py`): LM Studio check -> upgrades ticked in Verworpen -> fetch mails ->
+  extract (cached per email) -> real duplicates (`urls.normalize`, vs `state.seen` and the
+  vault's `sleutel` properties) -> fixed rules (`config/regels.toml`) -> judge (cached per
+  link) -> events out -> GitHub vital signs -> lanes: toppers + all repos kept, regular
+  items ranked, best `percentage`% kept -> same-topic items get a novelty question ->
+  write notes -> rejected list rendered from the DB -> only then move mails.
+- The model never scores: it answers fixed questions (`judge.py`); points come from
+  `config/beoordeling.toml`. Kurt edits the three TOML files, not code.
+- OSK output under `<vault>/Curator/`: `Items/` (one note per kept item, properties for
+  Bases), `Curator.base` (written once, never overwritten), `Verworpen/<date>.md` (tick
+  boxes with `%%rid:..%%`; removed after 90 days), `Runs/<date>.md`.
+- State: SQLite in `%LOCALAPPDATA%\curator2\curator2.sqlite`, log next to it. An
+  unfinished run (status `bezig`) is resumed by the next start.
+- Weekly repo review is done by Claude, not by the program: `curator2/repo_review.md`.
+- Tests: `uv run python -m pytest -q curator2/tests` (fake mails, fake LM Studio, fake GitHub).
+
 ## Scorer Backend: Claude or LM Studio
 `SCORER_BACKEND` in `.env` picks the scorer: `local` (LM Studio on the laptop, via the SSH
 tunnel) or `anthropic` (Claude API, laptop not needed). `docker-compose.yml` reads it as

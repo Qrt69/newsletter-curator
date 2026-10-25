@@ -1,0 +1,33 @@
+# Vaste regels: wat hier op past, gaat zonder tussenkomst van het taalmodel
+# naar Verworpen. Je mag regels toevoegen of verwijderen.
+#
+# Elke regel heeft een naam (komt als reden in de Verworpen-lijst) en een of
+# meer van deze voorwaarden:
+#   domeinen  = adressen waarvan de link niet bewaard wordt (ook subdomeinen)
+#   woorden   = woorden in de titel of linktekst (hoofdletters maken niet uit)
+#   adres_begint = het adres begint met een van deze stukken (na https://)
+#   adres_bevat  = het volledige adres bevat een van deze stukken
+#   alle = true betekent: adres_begint EN adres_bevat moeten allebei kloppen
+
+[[regel]]
+naam = "link naar X"
+domeinen = ["x.com", "twitter.com", "t.co"]
+
+[[regel]]
+naam = "webinar of evenement"
+woorden = ["webinar", "register now", "register here", "save your seat", "livestream",
+           "live stream", "join us live", "rsvp", "virtual event", "summit 20"]
+
+[[regel]]
+naam = "reclame of betaalde link"
+adres_begint = ["go.", "try.", "info.", "get.", "lp."]
+adres_bevat = ["utm_medium=paid", "utm_medium=cpc", "utm_medium=sponsor", "utm_source=sponsor"]
+alle = true
+
+[[regel]]
+naam = "gesponsorde link"
+adres_bevat = ["utm_medium=sponsored", "utm_campaign=sponsored", "/sponsored/"]
+
+[[regel]]
+naam = "sociale media"
+domeinen = ["linkedin.com", "facebook.com", "instagram.com", "threads.net", "tiktok.com"]

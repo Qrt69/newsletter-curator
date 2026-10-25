@@ -1,0 +1,34 @@
+# Instellingen van de curator.
+# Regels met een # ervoor zijn uitleg en doen niets.
+
+[osk]
+# Map van de vault en de submap waarin de curator schrijft.
+vault = 'F:\Obsidian'
+map = "Curator"
+
+[selectie]
+# Welk deel van de gewone items (geen repo's, geen toppers) bewaard wordt.
+percentage = 10
+# Minstens zoveel items bewaren, ook bij een kleine run.
+minimum = 1
+
+[verworpen]
+# Na hoeveel dagen een Verworpen-lijst vanzelf verdwijnt.
+bewaar_dagen = 90
+# Na hoeveel opwaarderingen van hetzelfde soort de samenvatting voorstelt
+# om milder te zijn.
+patroon_drempel = 5
+
+[topper]
+# Een repo telt pas als topper als hij actief en volwassen genoeg is.
+min_sterren = 50
+max_dagen_stil = 180
+
+[lmstudio]
+adres = "http://127.0.0.1:1234/v1"
+# Leeg = het model dat geladen is. Anders de naam zoals LM Studio hem toont.
+model = "qwen2.5-14b-instruct"
+# Maximaal zoveel seconden per vraag; daarna wordt het item later opnieuw geprobeerd.
+timeout = 180
+# Zoveel tekens van elk artikel krijgt het model te lezen.
+max_tekst = 3000
