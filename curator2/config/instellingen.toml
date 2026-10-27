@@ -9,8 +9,11 @@ map = "Curator"
 [selectie]
 # Welk deel van de gewone items (geen repo's, geen toppers) bewaard wordt.
 percentage = 10
-# Minstens zoveel items bewaren, ook bij een kleine run.
+# Minstens zoveel items bewaren, ook bij een kleine run (als ze de ondergrens halen).
 minimum = 1
+# Ondergrens: een gewoon item (geen repo of topper) heeft minstens zoveel punten
+# nodig, ook als het bij de beste van de run hoort. Punten: zie beoordeling.toml.
+min_punten = 6
 
 [verworpen]
 # Na hoeveel dagen een Verworpen-lijst vanzelf verdwijnt.

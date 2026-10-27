@@ -290,6 +290,10 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
     kept_regular = 0
     run_topics: dict[str, list[dict]] = {}
     for cd in regular:
+        if cd.score < cfg.min_points:
+            reject(cd.item, cd.key, cd.answers, "onder de ondergrens",
+                   f"{cd.answers.get('reason_nl', '')} ({cd.score:g} punten)".strip())
+            continue
         if kept_regular >= quota:
             reject(cd.item, cd.key, cd.answers, "niet bij de beste van de run",
                    f"{cd.answers.get('reason_nl', '')} ({cd.score:g} punten)".strip())

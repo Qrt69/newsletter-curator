@@ -170,3 +170,23 @@ def test_mail_with_unreadable_articles_is_held_back(cfg, tmp_path):
     assert src.moved == []
     go(cfg, state, judge, src, gh, today=date(2026, 10, 28))   # third night: processed anyway
     assert src.moved == ["b1"]
+
+
+def test_weak_items_are_not_kept_just_to_fill_the_quota(cfg, tmp_path):
+    mails = [{"id": "w1", "subject": "w", "sender_name": "W",
+              "items": [item(1, link_text="weak marketing page"), item(2, link_text="decent article here")]}]
+    ans = {"weak marketing page": {"usable": "ja", "fits": "deels", "fit": 2},      # 5 points
+           "decent article here": {"usable": "ja", "fits": "deels", "fit": 3}}     # 6 points
+    llm = FakeLLM(answers=ans)
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    res = go(cfg, state, judge, src, gh)
+    assert res.counts["gewoon_bewaard"] == 1
+    rej = (cfg.root / "Verworpen" / "2026-10-26.md").read_text(encoding="utf-8")
+    assert "## onder de ondergrens (1)" in rej
+
+    cfg.min_points = 99
+    mails2 = [{"id": "w2", "subject": "w", "sender_name": "W", "items": [item(3, link_text="anything at all")]}]
+    state2 = State(tmp_path / "s2.sqlite")
+    res2 = go(cfg, state2, Judge(cfg, transport=FakeLLM().transport()), FakeSource(mails2), gh,
+              today=date(2026, 10, 27))
+    assert res2.counts["gewoon_bewaard"] == 0     # minimum 1 never overrides the floor

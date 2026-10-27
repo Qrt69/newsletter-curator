@@ -54,6 +54,7 @@ class Config:
     points: dict
     categories: dict[str, str]
     never_categories: list[str]
+    min_points: float = 6.0
     judge_kind: str = "claude"
     claude_model: str = "claude-haiku-5-5"
     claude_monthly_cap: float = 5.0
@@ -110,6 +111,7 @@ def load(cfg_dir: Path | None = None, vault_override: Path | None = None) -> Con
         points=b["punten"],
         categories=b["categorieen"],
         never_categories=b.get("nooit", {}).get("categorieen", []),
+        min_points=float(s["selectie"].get("min_punten", 6)),
         judge_kind=s.get("beoordelaar", {}).get("soort", "claude"),
         claude_model=s.get("claude", {}).get("model", "claude-haiku-5-5"),
         claude_monthly_cap=float(s.get("claude", {}).get("maandplafond_dollar", 5.0)),
