@@ -377,6 +377,10 @@ def _finish(cfg: Config, state: State, vault: Vault, run_id: int, run_date: str,
     state.forget_rejected_before((today - timedelta(days=cfg.reject_keep_days)).isoformat())
     patterns = state.upgrade_patterns(30, cfg.pattern_threshold)
     vault.write_summary(run_date, summary_text(run_date, c, patterns, status))
+    try:
+        vault.refresh_hubs()
+    except OSError as exc:  # an overview that cannot be written must not fail the run
+        log.warning("Could not refresh category notes: %s", exc)
     state.finish_run(run_id, status, c)
     cost = f" Kosten: ${c['kosten_run']:.2f} (maand: ${c['kosten_maand']:.2f})." if "kosten_run" in c else ""
     progress(f"Klaar: {c.get('toppers', 0)} toppers, {c.get('repos', 0)} repo's, "

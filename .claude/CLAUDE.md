@@ -121,6 +121,11 @@ Reuses `src/email` (Graph fetcher, extractor, BrowserPool) unchanged.
   computed from usage x prices in `instellingen.toml`, booked in `state.costs`; a run
   whose estimate would pass `maandplafond_dollar` stops before sending anything (status
   `plafond`, mails stay). Run summary shows run and month cost.
+- Links (`hubs.py`, run at the end of every run): item `categorie` is a full-path link
+  `[[Curator/Categorieën/<cat>|<cat>]]`; a subject shared by 2+ items gets
+  `Onderwerpen/<subject>.md` and its items' `onderwerp` becomes a link. Hub notes hold an
+  embedded Base filtered on `file.hasLink(this.file)`, are written once, never overwritten.
+  `Curator.md` (start note) is rewritten each run. Old plain-text values are converted.
 - Weekly repo review is done by Claude, not by the program: `curator2/repo_review.md`.
 - Tests: `uv run python -m pytest -q curator2/tests` (fake mails, fake LM Studio, fake GitHub).
 

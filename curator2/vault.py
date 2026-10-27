@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .config import Config
+from . import hubs
 from .urls import clean
 
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f#^\[\]]')
@@ -67,6 +68,9 @@ class Vault:
         if not base.exists():  # never overwrite views Kurt may have changed
             base.write_text(BASE_FILE.replace("{folder}", self.cfg.folder), encoding="utf-8")
 
+    def refresh_hubs(self) -> dict:
+        return hubs.refresh(self.root, self.cfg.folder)
+
     # ── duplicates already in the vault ─────────────────────────
     def known_keys(self) -> set[str]:
         keys = set()
@@ -102,7 +106,7 @@ class Vault:
             "sleutel": key,
             "bron": source,
             "datum": run_date,
-            "categorie": category,
+            "categorie": hubs.link(self.cfg.folder, hubs.CAT_DIR, category),
             "soort": answers.get("kind", "other"),
             "onderwerp": answers.get("topic", ""),
             "topper": topper,

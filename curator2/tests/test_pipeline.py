@@ -86,7 +86,7 @@ def test_full_run(cfg, tmp_path):
     kept_regular = [k for k in n if k.startswith("Article") and 'soort: "repo"' not in n[k]]
     assert 'soort: "repo"' in n["Article 102"] and "topper: false" in n["Article 102"]
     assert sorted(kept_regular) == ["Article 18", "Article 19"]
-    assert 'categorie: "Python-bibliotheken"' in n["Big Tool"]
+    assert 'categorie: "[[Curator/Categorieën/Python-bibliotheken|Python-bibliotheken]]"' in n["Big Tool"]
 
     base = (cfg.root / "Curator.base").read_text(encoding="utf-8")
     assert 'file.inFolder("Curator/Items")' in base and "Om te gebruiken" in base
