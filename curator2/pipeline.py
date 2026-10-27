@@ -37,10 +37,31 @@ def _source_name(email: dict) -> str:
     return (email.get("sender_name") or email.get("sender") or email.get("subject") or "").strip()[:80]
 
 
-async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
+def _book_cost(state: State, judge, run_id: int, month: str):
+    """Write the dollars spent since the last booking to the database (Claude only)."""
+    spent = getattr(judge, "cost", 0.0)
+    booked = getattr(judge, "_booked", 0.0)
+    if spent > booked:
+        tin = getattr(judge, "input_tokens", 0) - getattr(judge, "_booked_in", 0)
+        tout = getattr(judge, "output_tokens", 0) - getattr(judge, "_booked_out", 0)
+        state.add_cost(month, run_id, spent - booked, tin, tout)
+        judge._booked, judge._booked_in, judge._booked_out = spent, judge.input_tokens, judge.output_tokens
+
+
+async def run(cfg: Config, source, judge, state: State, vault: Vault,
               github=None, today: date | None = None,
               progress: Callable[[str], None] = print) -> RunResult:
     today = today or date.today()
+    try:
+        return await _run(cfg, source, judge, state, vault, github, today, progress)
+    finally:
+        last = state.db.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        if last:
+            _book_cost(state, judge, last[0], today.strftime("%Y-%m"))
+
+
+async def _run(cfg: Config, source, judge, state: State, vault: Vault, github, today: date,
+               progress: Callable[[str], None]) -> RunResult:
     vault.prepare()
     run_id, resumed = state.open_run(today.isoformat())
     run_date = state.run_date(run_id)
@@ -50,12 +71,12 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
     if resumed:
         progress(f"Onderbroken run van {run_date} wordt verdergezet.")
 
-    # 0. LM Studio first: without it there is nothing to do, and nothing is touched.
+    # 0. The judge first (Claude or LM Studio): without it nothing is touched.
     try:
         model = judge.ensure_ready()
-        progress(f"LM Studio klaar (model: {model}).")
+        progress(f"Beoordelaar klaar (model: {model}).")
     except LLMUnavailable as exc:
-        return RunResult("onderbroken", f"LM Studio niet bereikbaar: {exc}", c)
+        return RunResult("onderbroken", f"Beoordelaar niet bereikbaar: {exc}", c)
 
     # 1. Upgrades Kurt ticked in earlier Verworpen lists.
     c["opgewaardeerd"] = _apply_upgrades(cfg, judge, state, vault, run_date, github, progress)
@@ -67,7 +88,7 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
         emails = await source.fetch()
         c["mails"] = len(emails)
         if not emails:
-            _finish(cfg, state, vault, run_id, run_date, today, c, "geen mails", progress)
+            _finish(cfg, state, vault, run_id, run_date, today, c, "geen mails", progress, judge)
             return RunResult("geen mails", "Geen nieuwe mails in 'to qualify'.", c)
         progress(f"{len(emails)} mails gevonden.")
         built = await _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress)
@@ -113,7 +134,7 @@ async def run(cfg: Config, source, judge: Judge, state: State, vault: Vault,
             log.warning("Could not move email %s: %s", eid, exc)
     c["verplaatst"] = moved
 
-    _finish(cfg, state, vault, run_id, run_date, today, c, "klaar", progress)
+    _finish(cfg, state, vault, run_id, run_date, today, c, "klaar", progress, judge)
     return RunResult("klaar", "", c)
 
 
@@ -184,6 +205,30 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
     progress(f"{c['items']} items: {c['dubbel']} dubbel, {c['regels']} door vaste regels, "
              f"{c['niet_leesbaar']} niet leesbaar, {len(to_judge)} te beoordelen.")
 
+    # Claude: all unjudged items in one batch, after checking the monthly cap.
+    if hasattr(judge, "judge_many"):
+        todo = {key: it for it, key in to_judge if state.get_judged(key) is None}
+        if todo:
+            month = date.today().strftime("%Y-%m")
+            spent = state.month_cost(month)
+            est = judge.estimate(len(todo))
+            if spent + est > cfg.claude_monthly_cap:
+                msg = (f"Maandplafond bereikt: deze maand al ${spent:.2f} uitgegeven, deze run zou ongeveer "
+                       f"${est:.2f} kosten en het plafond is ${cfg.claude_monthly_cap:.2f}. De mails blijven staan.")
+                vault.write_summary(state.run_date(run_id), f"# Run niet uitgevoerd\n\n{msg}\n")
+                return RunResult("plafond", msg, c)
+            progress(f"Beoordelen door Claude: {len(todo)} items, geschat ${est:.2f} "
+                     f"(deze maand al ${spent:.2f} van ${cfg.claude_monthly_cap:.2f}).")
+            try:
+                answers_by_key = judge.judge_many(todo, progress=progress)
+            except LLMUnavailable as exc:
+                return RunResult("onderbroken", str(exc), c)
+            finally:
+                _book_cost(state, judge, run_id, month)
+            for key, a in answers_by_key.items():
+                if a is not None:
+                    state.put_judged(key, a)
+
     # Judge (cached per link for a resumed run).
     cands: list[Candidate] = []
     retry_later = 0
@@ -197,7 +242,7 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
             try:
                 answers = judge.judge(it)
             except LLMUnavailable as exc:
-                return RunResult("onderbroken", f"LM Studio viel weg tijdens het beoordelen: {exc}", c)
+                return RunResult("onderbroken", f"Beoordelaar viel weg tijdens het beoordelen: {exc}", c)
             if answers is None:
                 if state.bump_failure(key) >= ITEM_RETRIES:
                     c["niet_beoordeeld"] += 1
@@ -255,7 +300,7 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
             try:
                 nv = judge.novelty(cd.answers["topic"], earlier, cd.answers["title"], cd.item.get("text") or "")
             except LLMUnavailable as exc:
-                return RunResult("onderbroken", f"LM Studio viel weg: {exc}", c)
+                return RunResult("onderbroken", f"Beoordelaar viel weg: {exc}", c)
             if nv and nv["adds"] == "nee":
                 c["zelfde_inhoud"] += 1
                 reject(cd.item, cd.key, cd.answers, "zelfde inhoud als eerder artikel",
@@ -321,14 +366,21 @@ def _apply_upgrades(cfg: Config, judge: Judge, state: State, vault: Vault, run_d
 
 
 def _finish(cfg: Config, state: State, vault: Vault, run_id: int, run_date: str, today: date,
-            c: dict, status: str, progress):
+            c: dict, status: str, progress, judge=None):
+    if judge is not None and hasattr(judge, "judge_many"):
+        month = date.today().strftime("%Y-%m")
+        _book_cost(state, judge, run_id, month)
+        c["kosten_run"] = round(state.run_cost(run_id), 4)
+        c["kosten_maand"] = round(state.month_cost(month), 4)
+        c["plafond"] = cfg.claude_monthly_cap
     c["opgeruimd"] = vault.cleanup_rejected(today, cfg.reject_keep_days)
     state.forget_rejected_before((today - timedelta(days=cfg.reject_keep_days)).isoformat())
     patterns = state.upgrade_patterns(30, cfg.pattern_threshold)
     vault.write_summary(run_date, summary_text(run_date, c, patterns, status))
     state.finish_run(run_id, status, c)
+    cost = f" Kosten: ${c['kosten_run']:.2f} (maand: ${c['kosten_maand']:.2f})." if "kosten_run" in c else ""
     progress(f"Klaar: {c.get('toppers', 0)} toppers, {c.get('repos', 0)} repo's, "
-             f"{c.get('gewoon_bewaard', 0)} andere items bewaard; {c.get('verworpen', 0)} verworpen.")
+             f"{c.get('gewoon_bewaard', 0)} andere items bewaard; {c.get('verworpen', 0)} verworpen.{cost}")
 
 
 def summary_text(run_date: str, c: dict, patterns: list, status: str) -> str:
@@ -343,7 +395,7 @@ def summary_text(run_date: str, c: dict, patterns: list, status: str) -> str:
         f"| Dubbels (al gezien) | {c.get('dubbel', 0)} |",
         f"| Door vaste regels verworpen | {c.get('regels', 0)} |",
         f"| Niet leesbaar | {c.get('niet_leesbaar', 0)} |",
-        f"| Beoordeeld door LM Studio | {c.get('beoordeeld', 0)} |",
+        f"| Beoordeeld door het taalmodel | {c.get('beoordeeld', 0)} |",
         f"| Kon niet beoordeeld worden | {c.get('niet_beoordeeld', 0)} |",
         f"| Toppers (Om te gebruiken) | {c.get('toppers', 0)} |",
         f"| Repo's | {c.get('repos', 0)} |",
@@ -353,6 +405,9 @@ def summary_text(run_date: str, c: dict, patterns: list, status: str) -> str:
         f"| Mails verplaatst naar processed | {c.get('verplaatst', 0)} |",
         "",
     ]
+    if "kosten_run" in c:
+        lines += [f"**Kosten Claude:** deze run ${c['kosten_run']:.2f}, deze maand ${c['kosten_maand']:.2f} "
+                  f"van een plafond van ${c['plafond']:.2f}.", ""]
     if c.get("opgeruimd"):
         lines += [f"{c['opgeruimd']} oude Verworpen-lijsten opgeruimd.", ""]
     if patterns:

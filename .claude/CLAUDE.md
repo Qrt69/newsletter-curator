@@ -113,6 +113,14 @@ Reuses `src/email` (Graph fetcher, extractor, BrowserPool) unchanged.
   boxes with `%%rid:..%%`; removed after 90 days), `Runs/<date>.md`.
 - State: SQLite in `%LOCALAPPDATA%\curator2\curator2.sqlite`, log next to it. An
   unfinished run (status `bezig`) is resumed by the next start.
+- Judge: `[beoordelaar] soort` = `claude` (default since 2026-10-27, `claude_judge.py`) or
+  `lmstudio` (`judge.py`). LM Studio was dropped because the laptop GPU collapses from
+  ~25 to ~1.5 tokens/s within a minute under load, intermittently, cause unknown.
+  Claude: all unjudged items of a run go out as ONE Message Batch (half price), answers
+  via a forced tool call, no `temperature` (Haiku 5.5 rejects it). Costs per call are
+  computed from usage x prices in `instellingen.toml`, booked in `state.costs`; a run
+  whose estimate would pass `maandplafond_dollar` stops before sending anything (status
+  `plafond`, mails stay). Run summary shows run and month cost.
 - Weekly repo review is done by Claude, not by the program: `curator2/repo_review.md`.
 - Tests: `uv run python -m pytest -q curator2/tests` (fake mails, fake LM Studio, fake GitHub).
 

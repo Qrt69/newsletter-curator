@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS plan (
     PRIMARY KEY (run_id, key)
 );
 CREATE TABLE IF NOT EXISTS plan_counts (run_id INTEGER PRIMARY KEY, counts TEXT);
+CREATE TABLE IF NOT EXISTS costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL, month TEXT, run_id INTEGER,
+    dollars REAL, tokens_in INTEGER, tokens_out INTEGER
+);
 CREATE TABLE IF NOT EXISTS failures (key TEXT PRIMARY KEY, n INTEGER);
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, started REAL, finished REAL,
@@ -146,6 +150,20 @@ class State:
 
     def plan_done(self, run_id: int, key: str):
         self.db.execute("UPDATE plan SET done = 1 WHERE run_id = ? AND key = ?", (run_id, key))
+
+    # ── money spent on Claude ───────────────────────────────────
+    def add_cost(self, month: str, run_id: int, dollars: float, tokens_in: int, tokens_out: int):
+        if dollars <= 0 and tokens_in <= 0:
+            return
+        self.db.execute("INSERT INTO costs (at, month, run_id, dollars, tokens_in, tokens_out) "
+                        "VALUES (?, ?, ?, ?, ?, ?)", (time.time(), month, run_id, dollars, tokens_in, tokens_out))
+        self.db.commit()
+
+    def month_cost(self, month: str) -> float:
+        return self.db.execute("SELECT COALESCE(SUM(dollars), 0) FROM costs WHERE month = ?", (month,)).fetchone()[0]
+
+    def run_cost(self, run_id: int) -> float:
+        return self.db.execute("SELECT COALESCE(SUM(dollars), 0) FROM costs WHERE run_id = ?", (run_id,)).fetchone()[0]
 
     # ── items or mails that keep failing ────────────────────────
     def bump_failure(self, key: str) -> int:

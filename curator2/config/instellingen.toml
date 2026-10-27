@@ -32,3 +32,23 @@ model = "qwen2.5-14b-instruct"
 timeout = 180
 # Zoveel tekens van elk artikel krijgt het model te lezen.
 max_tekst = 3000
+
+[beoordelaar]
+# Wie beantwoordt de vragen per item: "claude" of "lmstudio".
+soort = "claude"
+
+[claude]
+model = "claude-haiku-5-5"
+# Boven dit bedrag per kalendermaand (in dollar) start de curator geen nieuwe
+# beoordelingen meer; de mails blijven staan tot de volgende maand of tot je het
+# plafond verhoogt.
+maandplafond_dollar = 5.0
+# Alle items van een run in één pakket: half de prijs, antwoord meestal binnen minuten.
+pakket = true
+# Hoe lang de run maximaal op het pakket wacht.
+max_wachten_minuten = 240
+# Prijzen in dollar per miljoen tokens, om de kosten te berekenen.
+# Kijk ze na op platform.claude.com als Anthropic de prijzen wijzigt.
+prijs_invoer = 0.10
+prijs_uitvoer = 0.50
+pakket_korting = 0.5

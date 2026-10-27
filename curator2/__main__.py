@@ -65,6 +65,8 @@ def main() -> int:
         handlers=[logging.FileHandler(d / "curator2.log", encoding="utf-8")],
     )
     log = logging.getLogger("curator2")
+    for noisy in ("azure", "httpx", "httpcore", "msal", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     def progress(msg: str):
         print(msg, flush=True)
@@ -80,7 +82,16 @@ def main() -> int:
     if args.geen_mails_verplaatsen:
         source = _KeepMail(source)
     state = State(d / "curator2.sqlite")
-    judge = Judge(cfg)
+    if cfg.judge_kind == "claude":
+        from curator2.claude_judge import ClaudeJudge
+        from curator2.judge import LLMUnavailable
+        try:
+            judge = ClaudeJudge(cfg)
+        except LLMUnavailable as exc:
+            progress(f"Claude kan niet gebruikt worden: {exc}")
+            return 3
+    else:
+        judge = Judge(cfg)
     gh = GitHub()
     try:
         result = asyncio.run(run(cfg, source, judge, state, Vault(cfg), github=gh, progress=progress))

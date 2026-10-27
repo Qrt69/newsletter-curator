@@ -60,6 +60,17 @@ if (-not (Test-Path "$Config\instellingen.toml")) {
     Copy-Item "$Target\curator2\config\*.toml" $Config
 }
 
+# New settings blocks from an update are added to Kurt's own file, never replacing his values.
+$own = Get-Content "$Config\instellingen.toml" -Raw -Encoding UTF8
+$def = Get-Content "$Target\curator2\config\instellingen.toml" -Raw -Encoding UTF8
+foreach ($block in [regex]::Matches($def, '(?ms)^\[(\w+)\]\s*$.*?(?=^\[|\z)')) {
+    $name = $block.Groups[1].Value
+    if ($own -notmatch "(?m)^\[$name\]") {
+        Say "Nieuwe instellingen [$name] toevoegen aan $Config\instellingen.toml"
+        Add-Content -Path "$Config\instellingen.toml" -Value ("`r`n" + $block.Value.TrimEnd()) -Encoding UTF8
+    }
+}
+
 Say 'Python-pakketten installeren (eerste keer: enkele minuten)'
 Push-Location $Target
 try {
@@ -77,7 +88,7 @@ $trigger = New-ScheduledTaskTrigger -Daily -At $RunTime
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Description 'Haalt nieuwsbrieven op, beoordeelt ze met LM Studio en schrijft naar OSK.' -Force | Out-Null
+    -Description 'Haalt nieuwsbrieven op, laat ze beoordelen en schrijft naar OSK.' -Force | Out-Null
 
 Say 'KLAAR'
 Write-Host "Curator 2.0 staat in $Target en draait elke avond om $RunTime."
