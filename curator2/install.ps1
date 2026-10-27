@@ -83,14 +83,17 @@ try {
 
 Say "Avondrun om $RunTime inplannen"
 $uv = (Get-Command uv).Source
-$action  = New-ScheduledTaskAction -Execute $uv -Argument 'run python -m curator2' -WorkingDirectory $Target
+$action  = New-ScheduledTaskAction -Execute $uv -Argument 'run python -m curator2 --avond' -WorkingDirectory $Target
 $trigger = New-ScheduledTaskTrigger -Daily -At $RunTime
+# Retry every hour until midnight (the vault is on an external disk); a finished run makes the retries do nothing.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At $RunTime -RepetitionInterval (New-TimeSpan -Hours 1) `
+                       -RepetitionDuration (New-TimeSpan -Hours 4)).Repetition
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
     -Description 'Haalt nieuwsbrieven op, laat ze beoordelen en schrijft naar OSK.' -Force | Out-Null
 
 Say 'KLAAR'
-Write-Host "Curator 2.0 staat in $Target en draait elke avond om $RunTime."
+Write-Host "Curator 2.0 staat in $Target en draait elke avond om $RunTime (en elk uur opnieuw tot middernacht als je schijf niet aangesloten was)."
 Write-Host "Je instellingen staan in $Config."
 Write-Host "Een run nu meteen starten kan met:  Start-ScheduledTask -TaskName '$TaskName'"

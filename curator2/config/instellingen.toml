@@ -2,8 +2,8 @@
 # Regels met een # ervoor zijn uitleg en doen niets.
 
 [osk]
-# Map van de vault en de submap waarin de curator schrijft.
-vault = 'F:\Obsidian'
+# De vault zelf (de map waarin .obsidian staat) en de submap waarin de curator schrijft.
+vault = 'F:\Obsidian\QRT-Obsidian'
 map = "Curator"
 
 [selectie]

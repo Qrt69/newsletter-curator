@@ -63,3 +63,13 @@ def test_beehiiv_and_newsletter_tracking_is_removed():
     assert a == b == "wisprflow.ai/notetaker"
     # a real parameter stays
     assert normalize("https://example.com/watch?v=abc&utm_medium=x") == "example.com/watch?v=abc"
+
+
+def test_finished_today(tmp_path):
+    import time
+    from curator2.state import State
+    s = State(tmp_path / "s.sqlite")
+    rid, _ = s.open_run("2026-10-27")
+    assert not s.finished_today(time.strftime("%Y-%m-%d"))
+    s.finish_run(rid, "klaar", {})
+    assert s.finished_today(time.strftime("%Y-%m-%d"))

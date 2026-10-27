@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import date
 import logging
 import os
 import sys
@@ -52,6 +53,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="curator2")
     ap.add_argument("--vault", help="andere vault-map")
     ap.add_argument("--geen-mails-verplaatsen", action="store_true")
+    ap.add_argument("--avond", action="store_true",
+                    help="geplande avondrun: niets doen als de run van vandaag al gelukt is")
     args = ap.parse_args()
 
     from dotenv import load_dotenv
@@ -73,8 +76,21 @@ def main() -> int:
         log.info(msg)
 
     cfg = config_mod.load(vault_override=Path(args.vault) if args.vault else None)
+    if args.avond:
+        st = State(d / "curator2.sqlite")
+        try:
+            if st.finished_today(date.today().isoformat()):
+                log.info("Avondrun: vandaag al gedaan")
+                return 0
+        finally:
+            st.close()
     if not cfg.vault.exists():
-        progress(f"De vault {cfg.vault} bestaat niet. Pas instellingen.toml aan.")
+        progress(f"De vault {cfg.vault} is niet bereikbaar (externe schijf niet aangesloten?). "
+                 "De avondrun probeert het elk uur opnieuw tot middernacht.")
+        return 2
+    if not (cfg.vault / ".obsidian").is_dir():
+        progress(f"{cfg.vault} is geen Obsidian-vault (er staat geen .obsidian-map in). "
+                 "Pas 'vault' aan in instellingen.toml.")
         return 2
 
     from curator2.mailsource import OutlookSource
