@@ -55,3 +55,11 @@ def test_topper_needs_live_repo(cfg):
     assert alive.lane == "topper"
     assert dead.lane == "repo"
     assert article.lane == "gewoon"
+
+
+def test_beehiiv_and_newsletter_tracking_is_removed():
+    a = normalize("https://wisprflow.ai/notetaker?utm_source=beehiiv&_bhiiv=opp_1&bhcl_id=x&_bhlid=abc")
+    b = normalize("https://wisprflow.ai/notetaker?utm_source=superhuman&dub_id=q&shad=1&_bhlid=def")
+    assert a == b == "wisprflow.ai/notetaker"
+    # a real parameter stays
+    assert normalize("https://example.com/watch?v=abc&utm_medium=x") == "example.com/watch?v=abc"

@@ -9,7 +9,10 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 _TRACKING = re.compile(
     r"^(utm_.*|ref|ref_src|ref_url|source|src|mc_cid|mc_eid|fbclid|gclid|dclid|yclid|"
     r"igshid|_hsenc|_hsmi|mkt_tok|trk|trkid|sk|s_cid|cmpid|campaign|via|share|"
-    r"sh|si|spm|__s|oly_enc_id|oly_anon_id|vero_id|wickedid|elqtrackid|rid|lid)$",
+    r"sh|si|spm|__s|oly_enc_id|oly_anon_id|vero_id|wickedid|elqtrackid|rid|lid|"
+    r"_bhiiv|_bhlid|bhcl_id|dub_id|shad|ck_subscriber_id|lctg|mkt_tok|_kx|ss_source|"
+    r"ss_campaign_id|ss_email_id|hsCtaTracking|__hstc|__hssc|__hsfp|_gl|gad_source|"
+    r"gbraid|wbraid|msclkid|twclid|li_fat_id|rdt_cid|ttclid|ref_id|referrer)$",
     re.I,
 )
 
@@ -87,6 +90,16 @@ def normalize(url: str) -> str:
         if m:
             return f"medium.com/{m.group(1)}"
     return urlunsplit(("", host, path, urlencode(query), "")).lstrip("/")
+
+
+def clean(url: str) -> str:
+    """The link without tracking parameters, for showing in OSK."""
+    try:
+        p = urlsplit(url.strip())
+    except ValueError:
+        return url
+    query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _TRACKING.match(k)]
+    return urlunsplit((p.scheme, p.netloc, p.path, urlencode(query), p.fragment))
 
 
 def host_of(url: str) -> str:

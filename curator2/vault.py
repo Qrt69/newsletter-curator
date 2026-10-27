@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .config import Config
+from .urls import clean
 
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f#^\[\]]')
 _RID = re.compile(r"%%rid:([0-9a-f]{10})%%")
@@ -94,6 +95,7 @@ class Vault:
                 return candidate  # already written: never overwrite Kurt's or the review's edits
         if path.exists():
             path = self.items / f"{name} ({rid_for(key)[:6]}).md"
+        url = clean(url)
         props = {
             "titel": answers["title"],
             "url": url,
@@ -165,7 +167,7 @@ class Vault:
             for e in by_reason[reason]:
                 box = "x" if (e["rid"] in ticked_before or e.get("upgraded")) else " "
                 title = one_line(e["title"]).replace("[", "(").replace("]", ")")
-                url = one_line(e["url"]).replace(" ", "%20").replace(")", "%29")
+                url = one_line(clean(e["url"])).replace(" ", "%20").replace(")", "%29")
                 src = f" · {one_line(e['source'])}" if e.get("source") else ""
                 why = f" — {one_line(e['why'])}" if e.get("why") else ""
                 done = " · opgewaardeerd" if e.get("upgraded") else ""
