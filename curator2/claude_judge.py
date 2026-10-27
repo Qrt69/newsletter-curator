@@ -11,6 +11,7 @@ The same fixed questions as judge.py, answered by Claude instead of LM Studio.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import anthropic
@@ -47,6 +48,7 @@ class ClaudeJudge:
         self.output_tokens = 0
         self.calls = 0
         self.failures = 0
+        self._lock = threading.Lock()
 
     def close(self):
         try:
@@ -58,6 +60,10 @@ class ClaudeJudge:
     def _add_usage(self, usage, batch: bool):
         if usage is None:
             return
+        with self._lock:
+            self._add_usage_locked(usage, batch)
+
+    def _add_usage_locked(self, usage, batch: bool):
         inp = (getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
         cached = getattr(usage, "cache_read_input_tokens", 0) or 0
         out = getattr(usage, "output_tokens", 0) or 0
@@ -149,7 +155,7 @@ class ClaudeJudge:
         if not items:
             return {}
         if not self.cfg.claude_batch:
-            return {k: self.judge(it) for k, it in items.items()}
+            return self._judge_parallel(items, progress)
         ids = {f"i{n}": k for n, k in enumerate(items)}
         requests = [{"custom_id": cid, "params": self._item_params(items[k])} for cid, k in ids.items()]
         try:
@@ -174,7 +180,7 @@ class ClaudeJudge:
                 except Exception:
                     pass
                 raise LLMUnavailable("Claude antwoordde niet binnen de wachttijd; de run gaat de volgende keer verder")
-            if time.time() - last_note > 300:
+            if time.time() - last_note > 60:
                 rc = getattr(batch, "request_counts", None)
                 done = getattr(rc, "succeeded", 0) + getattr(rc, "errored", 0) if rc else 0
                 progress(f"  Claude is bezig ({done}/{len(requests)} beantwoord)")
@@ -197,6 +203,29 @@ class ClaudeJudge:
                 self.failures += 1
                 continue
             out[key] = clean_answers(a, self.categories, items[key])
+        return out
+
+    def _judge_parallel(self, items: dict[str, dict], progress) -> dict[str, dict | None]:
+        """Ask Claude item by item, a few at a time, reporting progress every 10 items."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        out: dict[str, dict | None] = {}
+        total = len(items)
+        t0 = time.time()
+        progress(f"Claude beoordeelt {total} items, vier tegelijk...")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(self.judge, it): k for k, it in items.items()}
+            try:
+                for n, fut in enumerate(as_completed(futures), 1):
+                    out[futures[fut]] = fut.result()
+                    if n % 10 == 0 or n == total:
+                        left = (time.time() - t0) / n * (total - n)
+                        progress(f"  {n}/{total} beoordeeld, nog ongeveer {left / 60:.0f} min, "
+                                 f"kost tot nu ${self.cost:.3f}")
+            except LLMUnavailable:
+                for f in futures:
+                    f.cancel()
+                raise
         return out
 
     def novelty(self, topic: str, earlier: list[dict], title: str, text: str) -> dict | None:

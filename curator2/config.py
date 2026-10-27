@@ -57,7 +57,7 @@ class Config:
     judge_kind: str = "claude"
     claude_model: str = "claude-haiku-5-5"
     claude_monthly_cap: float = 5.0
-    claude_batch: bool = True
+    claude_batch: bool = False
     claude_max_wait_minutes: int = 240
     claude_price_in: float = 0.10
     claude_price_out: float = 0.50
@@ -113,7 +113,7 @@ def load(cfg_dir: Path | None = None, vault_override: Path | None = None) -> Con
         judge_kind=s.get("beoordelaar", {}).get("soort", "claude"),
         claude_model=s.get("claude", {}).get("model", "claude-haiku-5-5"),
         claude_monthly_cap=float(s.get("claude", {}).get("maandplafond_dollar", 5.0)),
-        claude_batch=bool(s.get("claude", {}).get("pakket", True)),
+        claude_batch=bool(s.get("claude", {}).get("pakket", False)),
         claude_max_wait_minutes=int(s.get("claude", {}).get("max_wachten_minuten", 240)),
         claude_price_in=float(s.get("claude", {}).get("prijs_invoer", 0.10)),
         claude_price_out=float(s.get("claude", {}).get("prijs_uitvoer", 0.50)),

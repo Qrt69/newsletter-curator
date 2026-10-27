@@ -106,6 +106,7 @@ def go(cfg, tmp_path, judge, mails, today=date(2026, 10, 27)):
 
 
 def test_whole_run_in_one_batch_with_costs(cfg, tmp_path, monkeypatch):
+    cfg.claude_batch = True
     fake = FakeClaude(answers(), novelty={"Qwen9 B": "nee"})
     judge = make_claude(cfg, fake, monkeypatch)
     res, state, src = go(cfg, tmp_path, judge, build_mail())
@@ -157,3 +158,20 @@ def test_wrong_key_is_reported(cfg, tmp_path, monkeypatch):
     res, state, src = go(cfg, tmp_path, judge, build_mail())
     assert res.status == "onderbroken" and "sleutel" in res.message
     assert src.extract_calls == []
+
+
+def test_item_by_item_with_progress(cfg, tmp_path, monkeypatch):
+    cfg.claude_batch = False
+    fake = FakeClaude(answers(), novelty={"Qwen9 B": "nee"})
+    judge = make_claude(cfg, fake, monkeypatch)
+    msgs = []
+    state = State(tmp_path / "s.sqlite")
+    gh = FakeGitHub({"big/tool": {"stars": 900, "days_idle": 2, "archived": False, "license": "MIT"}})
+    src = FakeSource(build_mail())
+    res = asyncio.run(run(cfg, src, judge, state, Vault(cfg), github=gh, today=date(2026, 10, 27),
+                          progress=msgs.append))
+    assert res.status == "klaar" and fake.batch_creates == 0
+    assert res.counts["toppers"] == 1 and res.counts["gewoon_bewaard"] == 3
+    assert any("10/25 beoordeeld" in m for m in msgs) and any("25/25 beoordeeld" in m for m in msgs)
+    expected = 25 * (1500 * 0.10 + 200 * 0.50) / 1e6
+    assert abs(res.counts["kosten_run"] - expected) < 0.01
