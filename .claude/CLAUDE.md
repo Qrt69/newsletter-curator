@@ -116,7 +116,9 @@ Reuses `src/email` (Graph fetcher, extractor, BrowserPool) unchanged.
 - Judge: `[beoordelaar] soort` = `claude` (default since 2026-10-27, `claude_judge.py`) or
   `lmstudio` (`judge.py`). LM Studio was dropped because the laptop GPU collapses from
   ~25 to ~1.5 tokens/s within a minute under load, intermittently, cause unknown.
-  Claude: all unjudged items of a run go out as ONE Message Batch (half price), answers
+  Claude: items go one by one, four at a time (`pakket = false`, default since 2026-10-27:
+  a batch sat at 0/315 for 5+ minutes while Kurt watched); `pakket = true` sends ONE
+  Message Batch (half price). Answers
   via a forced tool call, no `temperature` (Haiku 5.5 rejects it). Costs per call are
   computed from usage x prices in `instellingen.toml`, booked in `state.costs`; a run
   whose estimate would pass `maandplafond_dollar` stops before sending anything (status
