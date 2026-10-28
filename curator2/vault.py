@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .config import Config
 from . import hubs
-from .urls import clean
+from .urls import clean, normalize, unwrap
 
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f#^\[\]]')
 _RID = re.compile(r"%%rid:([0-9a-f]{10})%%")
@@ -92,7 +92,11 @@ class Vault:
                 continue
             m = re.search(r'^sleutel:\s*"?([^"\n]+)"?\s*$', head, re.M)
             if m:
-                keys.add(m.group(1).strip())
+                k = m.group(1).strip()
+                keys.add(k)
+                real = unwrap(k)
+                if real != k:  # older notes kept the tracking link as key
+                    keys.add(normalize(real))
         return keys
 
     def known_titles(self) -> set[str]:

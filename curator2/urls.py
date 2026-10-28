@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -26,8 +28,30 @@ _GITHUB_RESERVED = {
 }
 
 
+def unwrap(url: str) -> str:
+    """
+    Some newsletter tools (Kit/ConvertKit and others) put the real address,
+    base64-encoded, as the last part of their click-tracking link:
+    https://xyz.click.kit-mail3.com/abc/def/aHR0cHM6Ly9naXRodWIuY29t... -> https://github.com...
+    Returns the real address, or the link unchanged.
+    """
+    if not url:
+        return url
+    last = url.split("?", 1)[0].split("#", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    if len(last) < 12 or not last.startswith("aHR0c"):  # base64 of "http"
+        return url
+    try:
+        real = base64.urlsafe_b64decode(last + "=" * (-len(last) % 4)).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return url
+    if re.match(r"^https?://[^\s/]+\.[^\s]+$", real):
+        return unwrap(real)
+    return url
+
+
 def github_repo(url: str) -> str | None:
     """'github.com/Owner/Repo/tree/main/x' -> 'owner/repo'; None if not a repo link."""
+    url = unwrap(url)
     try:
         p = urlsplit(url)
     except ValueError:
@@ -46,6 +70,7 @@ def github_repo(url: str) -> str | None:
 
 def huggingface_model(url: str) -> str | None:
     """'huggingface.co/Org/Model/...' -> 'org/model' (model pages only)."""
+    url = unwrap(url)
     try:
         p = urlsplit(url)
     except ValueError:
@@ -66,6 +91,7 @@ def normalize(url: str) -> str:
     """
     if not url:
         return ""
+    url = unwrap(url)
     repo = github_repo(url)
     if repo:
         return f"github.com/{repo}"
@@ -94,6 +120,7 @@ def normalize(url: str) -> str:
 
 def clean(url: str) -> str:
     """The link without tracking parameters, for showing in OSK."""
+    url = unwrap(url)
     try:
         p = urlsplit(url.strip())
     except ValueError:
