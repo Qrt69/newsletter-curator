@@ -34,8 +34,8 @@ The reader:
 Answer in JSON with exactly these fields:
 - title: a clean, short name for the item (product, library, model or article title).
 - description_nl: two short sentences in Dutch saying what it is and what it is good for.
-- category: one of {categories}. Use "event" for webinars, conferences, live sessions \
-and other dated events.
+- category: the key of the category that fits best (choose by what the item IS):
+{categories}
 - new_category: empty string, or a short Dutch name when none of the categories fits at all.
 - kind: one of {kinds}. "repo" = a code repository, "local_model" = model weights \
 someone can run locally, "announcement" = news or a launch without substance.
@@ -76,6 +76,10 @@ Earlier articles:
 
 New article: {title}
 {text}"""
+
+
+def category_lines(cfg) -> str:
+    return "\n".join(f"  - {k}: {cfg.descriptions.get(k, cfg.categories[k])}" for k in cfg.categories)
 
 
 def _schema(categories: list[str]) -> dict:
@@ -284,7 +288,7 @@ class Judge:
             text = "[geen artikeltekst beschikbaar — oordeel op titel, link en linktekst]"
         system = SYSTEM.format(
             profile=self.cfg.profile,
-            categories=", ".join(self.categories),
+            categories=category_lines(self.cfg),
             kinds=", ".join(KINDS),
         )
         user = USER.format(

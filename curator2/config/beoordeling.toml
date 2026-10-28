@@ -52,6 +52,14 @@ article = "Artikels"
 book_paper = "Boeken en papers"
 event = "Evenementen"
 
+# Wat elke categorie betekent; dit krijgt het model mee bij het kiezen.
+# (Staat een categorie hier niet, dan gebruikt het programma een standaardomschrijving.)
+[omschrijvingen]
+model_release = "an AI model itself: a new LLM or other model, a new version, its weights, benchmarks of a model"
+ai_tool = "a finished AI product or service for end users (an app, SaaS, assistant); NOT a model itself"
+coding_tool = "an AI assistant for people who write and read code themselves: works inside the editor or terminal on an existing codebase (Claude Code, Cursor, Copilot, Codex, AI code review)"
+vibe_coding_tool = "a tool where you describe an app in plain words and it builds and hosts it for you, without touching code (Lovable, Bolt, v0, Replit Agent)"
+
 # Categorieën die nooit bewaard worden.
 [nooit]
 categorieen = ["event"]

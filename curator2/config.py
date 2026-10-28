@@ -9,6 +9,26 @@ from pathlib import Path
 
 PACKAGE_CONFIG = Path(__file__).parent / "config"
 
+# What each category means, told to the model. Overridden by [omschrijvingen] in beoordeling.toml.
+DEFAULT_DESCRIPTIONS = {
+    "python_library": "a Python package or library (installable with pip/uv)",
+    "duckdb_extension": "a DuckDB extension or DuckDB integration",
+    "ai_tool": "a finished AI product or service for end users (an app, SaaS, assistant); NOT a model itself",
+    "agent_workflow": "a framework or method for building AI agents or agentic workflows",
+    "model_release": "an AI model itself: a new LLM or other model, a new version, its weights, benchmarks of a model",
+    "platform_infra": "a platform or infrastructure product (cloud, data platform, serving, orchestration)",
+    "concept_pattern": "an idea, pattern or method explained, not tied to one product",
+    "coding_tool": "an AI assistant for people who write and read code themselves: works inside the "
+                   "editor or terminal on an existing codebase (Claude Code, Cursor, Copilot, Codex, AI code review)",
+    "vibe_coding_tool": "a tool where you describe an app in plain words and it builds and hosts it for you, "
+                        "without touching code (Lovable, Bolt, v0, Replit Agent)",
+    "ai_architecture": "how AI systems are designed: architecture, design principles, system design",
+    "infra_reference": "a reference or technique for operations: Docker, Linux, networking, commands",
+    "article": "an article, tutorial or course that does not fit a more specific category",
+    "book_paper": "a book, research paper or long publication",
+    "event": "a webinar, conference, live session or other dated event",
+}
+
 
 def config_dir() -> Path:
     """
@@ -54,6 +74,7 @@ class Config:
     points: dict
     categories: dict[str, str]
     never_categories: list[str]
+    descriptions: dict = field(default_factory=dict)
     min_points: float = 6.0
     judge_kind: str = "claude"
     claude_model: str = "claude-haiku-5-5"
@@ -111,6 +132,7 @@ def load(cfg_dir: Path | None = None, vault_override: Path | None = None) -> Con
         points=b["punten"],
         categories=b["categorieen"],
         never_categories=b.get("nooit", {}).get("categorieen", []),
+        descriptions={**DEFAULT_DESCRIPTIONS, **b.get("omschrijvingen", {})},
         min_points=float(s["selectie"].get("min_punten", 6)),
         judge_kind=s.get("beoordelaar", {}).get("soort", "claude"),
         claude_model=s.get("claude", {}).get("model", "claude-haiku-5-5"),

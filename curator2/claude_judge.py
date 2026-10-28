@@ -19,7 +19,7 @@ import httpx
 
 from .config import Config
 from .judge import (KINDS, NOVELTY_SYSTEM, NOVELTY_USER, SYSTEM, USER, LLMUnavailable,
-                    _NOVELTY_SCHEMA, _pick, _safe, _schema, clean_answers, YN)
+                    _NOVELTY_SCHEMA, _pick, _safe, _schema, category_lines, clean_answers, YN)
 
 log = logging.getLogger("curator2.claude")
 
@@ -84,7 +84,7 @@ class ClaudeJudge:
     def _item_params(self, item: dict) -> dict:
         text = (item.get("text") or "")[: self.cfg.max_text] or \
             "[geen artikeltekst beschikbaar — oordeel op titel, link en linktekst]"
-        system = SYSTEM.format(profile=self.cfg.profile, categories=", ".join(self.categories),
+        system = SYSTEM.format(profile=self.cfg.profile, categories=category_lines(self.cfg),
                                kinds=", ".join(KINDS))
         user = USER.format(
             url=item.get("resolved_url") or item.get("source_url") or "",

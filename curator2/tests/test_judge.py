@@ -40,3 +40,12 @@ def test_base_file_is_valid_yaml():
     d = yaml.safe_load(BASE_FILE.replace("{folder}", "Curator"))
     names = [v["name"] for v in d["views"]]
     assert names == ["Nieuwste", "Per categorie", "Om te gebruiken", "Per onderwerp", "Repo-review"]
+
+
+def test_prompt_explains_each_category(cfg):
+    from curator2.judge import SYSTEM, KINDS, category_lines
+    text = SYSTEM.format(profile="p", categories=category_lines(cfg), kinds=", ".join(KINDS))
+    assert "model_release: an AI model itself" in text
+    assert "ai_tool: a finished AI product" in text and "NOT a model itself" in text
+    assert "coding_tool: an AI assistant for people who write and read code" in text
+    assert "vibe_coding_tool: a tool where you describe an app in plain words" in text
