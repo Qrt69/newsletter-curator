@@ -44,6 +44,15 @@ def one_line(s) -> str:
     return " ".join(str(s or "").split())
 
 
+def title_key(title: str) -> str:
+    """
+    Title reduced to letters and digits, for catching the same article behind two
+    different tracking links. Short titles ("Mosaic") are too ambiguous: empty key.
+    """
+    t = re.sub(r"[^0-9a-z]+", "", (title or "").lower())
+    return t if len(t) >= 20 else ""
+
+
 def slug(title: str) -> str:
     s = _BAD.sub(" ", title or "").strip()
     s = re.sub(r"\s+", " ", s).strip(" .")
@@ -85,6 +94,22 @@ class Vault:
             if m:
                 keys.add(m.group(1).strip())
         return keys
+
+    def known_titles(self) -> set[str]:
+        """Comparable titles of the kept notes (see title_key)."""
+        out = set()
+        if not self.items.exists():
+            return out
+        for p in self.items.rglob("*.md"):
+            try:
+                head = p.read_text(encoding="utf-8", errors="ignore")[:3000]
+            except OSError:
+                continue
+            m = re.search(r'^titel:\s*"?(.*?)"?\s*$', head, re.M)
+            t = title_key(m.group(1)) if m else ""
+            if t:
+                out.add(t)
+        return out
 
     # ── kept items ──────────────────────────────────────────────
     def write_item(self, *, key: str, url: str, answers: dict, source: str, run_date: str,

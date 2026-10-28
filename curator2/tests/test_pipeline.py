@@ -198,3 +198,28 @@ def test_failed_mail_is_not_moved(cfg, tmp_path):
     res = go(cfg, state, judge, src, gh)
     assert res.status == "klaar"
     assert src.moved == ["m1"]
+
+
+def test_same_title_behind_other_link_is_a_duplicate(cfg, tmp_path):
+    long_title = "A Practical Guide to Scaling ML Model Training"
+    mails = [{"id": "m1", "subject": "Kit", "sender_name": "Kit", "items": [
+        item(200, url="https://p9uggq7k.r.eu-west-1.awstrack.me/a", link_text="guide A", title=long_title),
+        item(201, url="https://d0ugg5.r.eu-west-1.awstrack.me/b", link_text="guide B", title=long_title),
+    ]}]
+    a = {"guide A": {"usable": "ja", "fits": "ja", "fit": 5, "title": long_title},
+         "guide B": {"usable": "ja", "fits": "ja", "fit": 5, "title": long_title + "!"}}
+    llm = FakeLLM(answers=a)
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    res = go(cfg, state, judge, src, gh)
+    assert res.status == "klaar", res.message
+    assert res.counts["dubbel"] == 1
+    assert len(notes(cfg)) == 1
+
+    # a later run with yet another link to the same article keeps nothing new
+    mails2 = [{"id": "m2", "subject": "Kit", "sender_name": "Kit", "items": [
+        item(202, url="https://zz.example.net/c", link_text="guide C", title=long_title)]}]
+    llm2 = FakeLLM(answers={"guide C": {"usable": "ja", "fits": "ja", "fit": 5, "title": long_title}})
+    (tmp_path / "s2").mkdir()
+    state2, judge2, src2, _ = make(cfg, tmp_path / "s2", llm2, mails2)
+    res2 = go(cfg, state2, judge2, src2, gh, today=date(2026, 10, 27))
+    assert res2.counts["dubbel"] == 1 and len(notes(cfg)) == 1

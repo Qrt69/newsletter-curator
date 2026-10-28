@@ -19,7 +19,7 @@ from .judge import Judge, LLMUnavailable
 from .rank import Candidate
 from .state import State
 from .urls import github_repo, huggingface_model, normalize
-from .vault import Vault, rid_for
+from .vault import Vault, rid_for, title_key
 
 log = logging.getLogger("curator2.pipeline")
 
@@ -273,6 +273,21 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
             reject(cd.item, cd.key, cd.answers, "webinar of evenement", cd.answers.get("reason_nl", ""))
         else:
             remaining.append(cd)
+    cands = remaining
+
+    # Same title as a kept note or an earlier item in this run: the same article
+    # behind another tracking link (the URL check above cannot see that).
+    titles = vault.known_titles()
+    remaining = []
+    for cd in sorted(cands, key=lambda x: -rank.points(x.answers, cfg)):
+        tk = title_key(cd.answers.get("title", ""))
+        if tk and tk in titles:
+            c["dubbel"] += 1
+            reject(cd.item, cd.key, cd.answers, "zelfde titel als bewaard item", cd.answers.get("title", ""))
+            continue
+        if tk:
+            titles.add(tk)
+        remaining.append(cd)
     cands = remaining
 
     # Repo vital signs (for toppers and the weekly review).
