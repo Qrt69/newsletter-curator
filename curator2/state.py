@@ -82,10 +82,13 @@ class State:
         self.db.commit()
         return cur.lastrowid, False
 
-    def finished_today(self, today: str) -> bool:
+    def finished_today(self, today: str, from_hour: int = 0) -> bool:
+        """A run finished on this day at or after from_hour (local time)."""
         return self.db.execute(
-            "SELECT 1 FROM runs WHERE status IN ('klaar', 'geen mails') AND date(finished, 'unixepoch', 'localtime') = ?",
-            (today,)).fetchone() is not None
+            "SELECT 1 FROM runs WHERE status IN ('klaar', 'geen mails') "
+            "AND date(finished, 'unixepoch', 'localtime') = ? "
+            "AND CAST(strftime('%H', finished, 'unixepoch', 'localtime') AS INTEGER) >= ?",
+            (today, from_hour)).fetchone() is not None
 
     def run_date(self, run_id: int) -> str:
         return self.db.execute("SELECT run_date FROM runs WHERE id = ?", (run_id,)).fetchone()[0]

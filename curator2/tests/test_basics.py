@@ -73,3 +73,10 @@ def test_finished_today(tmp_path):
     assert not s.finished_today(time.strftime("%Y-%m-%d"))
     s.finish_run(rid, "klaar", {})
     assert s.finished_today(time.strftime("%Y-%m-%d"))
+    # a run that finished this morning does not count as tonight's run
+    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?",
+                 (time.mktime(time.strptime(time.strftime("%Y-%m-%d") + " 09:00", "%Y-%m-%d %H:%M")), rid))
+    assert not s.finished_today(time.strftime("%Y-%m-%d"), from_hour=18)
+    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?",
+                 (time.mktime(time.strptime(time.strftime("%Y-%m-%d") + " 20:30", "%Y-%m-%d %H:%M")), rid))
+    assert s.finished_today(time.strftime("%Y-%m-%d"), from_hour=18)

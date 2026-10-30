@@ -49,12 +49,15 @@ class _KeepMail:
         self.src.close()
 
 
+EVENING_FROM = 18  # a run that finishes from this hour on counts as the evening run
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="curator2")
     ap.add_argument("--vault", help="andere vault-map")
     ap.add_argument("--geen-mails-verplaatsen", action="store_true")
     ap.add_argument("--avond", action="store_true",
-                    help="geplande avondrun: niets doen als de run van vandaag al gelukt is")
+                    help="geplande avondrun: niets doen als de run van vanavond al gelukt is")
     args = ap.parse_args()
 
     from dotenv import load_dotenv
@@ -79,8 +82,10 @@ def main() -> int:
     if args.avond:
         st = State(d / "curator2.sqlite")
         try:
-            if st.finished_today(date.today().isoformat()):
-                log.info("Avondrun: vandaag al gedaan")
+            # Only an evening run counts: a run Kurt starts himself during the day
+            # (to catch up) does not replace the evening run.
+            if st.finished_today(date.today().isoformat(), from_hour=EVENING_FROM):
+                log.info("Avondrun: vanavond al gedaan")
                 return 0
         finally:
             st.close()
