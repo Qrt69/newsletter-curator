@@ -8,6 +8,7 @@ move to "processed" once everything is written into OSK.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -18,7 +19,7 @@ from .config import Config
 from .judge import Judge, LLMUnavailable
 from .rank import Candidate
 from .state import State
-from .urls import github_repo, huggingface_model, normalize
+from .urls import github_repo, host_of, huggingface_model, normalize
 from .vault import Vault, rid_for, title_key
 
 log = logging.getLogger("curator2.pipeline")
@@ -158,9 +159,17 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
                 progress("  Kon deze mail niet lezen; ze blijft staan voor de volgende run.")
                 c["mails_overgeslagen"] += 1
                 continue
-            bad = sum(1 for it in items if it.get("extraction_status") in _EXTRACT_FAILED)
-            if len(items) >= 4 and bad / len(items) > 0.5 and state.bump_failure("mail:" + e["id"]) < MAIL_RETRIES:
-                progress(f"  {bad} van {len(items)} artikels niet leesbaar; de mail blijft staan "
+            # Links the fixed rules drop anyway (social media, subscribe pages...) do not count.
+            counted = [it for it in items if not rules.check(it, cfg.rules)]
+            failed = [it for it in counted if it.get("extraction_status") in _EXTRACT_FAILED]
+            bad = len(failed)
+            if failed:
+                hosts = Counter(f"{it.get('extraction_status')} {host_of(it.get('resolved_url') or it.get('source_url') or '')}"
+                                for it in failed)
+                log.info("Niet leesbaar in '%s': %s", e.get("subject", "")[:60],
+                         ", ".join(f"{k} x{v}" for k, v in hosts.most_common(6)))
+            if len(counted) >= 4 and bad / len(counted) > 0.5 and state.bump_failure("mail:" + e["id"]) < MAIL_RETRIES:
+                progress(f"  {bad} van {len(counted)} artikels niet leesbaar; de mail blijft staan "
                          "en wordt morgen opnieuw geprobeerd.")
                 c["mails_overgeslagen"] += 1
                 continue

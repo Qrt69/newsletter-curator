@@ -31,3 +31,9 @@ adres_bevat = ["utm_medium=sponsored", "utm_campaign=sponsored", "/sponsored/"]
 [[regel]]
 naam = "sociale media"
 domeinen = ["linkedin.com", "facebook.com", "instagram.com", "threads.net", "tiktok.com"]
+
+
+[[regel]]
+naam = "beheer van de nieuwsbrief"
+adres_begint = ["preferences.kit.com"]
+adres_bevat = ["/subscribe/", "/preferences?", "/unsubscribe"]
