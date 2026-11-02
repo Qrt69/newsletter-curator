@@ -1,12 +1,12 @@
 # Wekelijkse repo-review (opdracht voor Claude)
 
 Elke zondagavond om 21:40, na de gewone run van 20:00. Kurts laptop staat aan, de
-Claude-app is open en de externe schijf F: hangt eraan. Deze tekst is ook de opdracht
+Claude-app is open en de vault staat op C:. Deze tekst is ook de opdracht
 van de geplande taak "Curator repo-review".
 
 ## Wat je doet
 
-1. Lees de notities in `F:\Obsidian\QRT-Obsidian\Curator\Items` via de koppeling met
+1. Lees de notities in `C:\Users\KurtFarasyn\Obsidian\QRT-Obsidian\Curator\Items` via de koppeling met
    Kurts laptop (bestanden ophalen en terugschrijven). Neem alle notities met
    `soort: repo` (met of zonder aanhalingstekens; Obsidian haalt ze soms weg) waarvan
    `repo_oordeel` leeg is.
@@ -36,4 +36,4 @@ van de geplande taak "Curator repo-review".
   zoals ze is (Kurt kan er zelf in geschreven hebben).
 - Geen oordeel overschrijven dat Kurt zelf heeft aangepast.
 - Bij twijfel tussen houden en weg: houden.
-- Is de laptop of schijf F: niet bereikbaar, doe dan niets en meld dat kort.
+- Is de laptop of de vault niet bereikbaar, doe dan niets en meld dat kort.

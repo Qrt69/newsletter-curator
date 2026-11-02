@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from curator2 import config as config_mod  # noqa: E402
 from curator2.github import GitHub  # noqa: E402
 from curator2.judge import Judge  # noqa: E402
+from curator2.net import internet_ok  # noqa: E402
 from curator2.pipeline import run  # noqa: E402
 from curator2.state import State  # noqa: E402
 from curator2.vault import Vault  # noqa: E402
@@ -115,7 +116,8 @@ def main() -> int:
         judge = Judge(cfg)
     gh = GitHub()
     try:
-        result = asyncio.run(run(cfg, source, judge, state, Vault(cfg), github=gh, progress=progress))
+        result = asyncio.run(run(cfg, source, judge, state, Vault(cfg), github=gh, progress=progress,
+                                 online=internet_ok))
     except Exception:
         log.exception("Run crashed")
         progress("De run is gecrasht; details staan in " + str(d / "curator2.log") +

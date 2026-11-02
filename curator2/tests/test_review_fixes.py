@@ -190,3 +190,41 @@ def test_weak_items_are_not_kept_just_to_fill_the_quota(cfg, tmp_path):
     res2 = go(cfg, state2, Judge(cfg, transport=FakeLLM().transport()), FakeSource(mails2), gh,
               today=date(2026, 10, 27))
     assert res2.counts["gewoon_bewaard"] == 0     # minimum 1 never overrides the floor
+
+
+def test_no_internet_touches_nothing_and_keeps_the_run_open(cfg, tmp_path):
+    from curator2.pipeline import run
+    bad = [dict(item(i), extraction_status="redirect_failed", text=None) for i in range(5)]
+    mails = [{"id": "b1", "subject": "beehiiv", "sender_name": "B", "items": bad}]
+    llm = FakeLLM(answers=answers())
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    r = asyncio.run(run(cfg, src, judge, state, Vault(cfg), github=gh, today=date(2026, 10, 26),
+                        progress=lambda m: None, online=lambda: False))
+    assert r.status == "onderbroken" and src.moved == []
+    assert (cfg.root / "Runs" / "2026-10-26 geen internet.md").exists()
+    assert not state.finished_today("2026-10-26")
+    assert state.db.execute("SELECT COUNT(*) FROM failures").fetchone()[0] == 0
+
+
+def test_connection_lost_during_reading_stops_before_a_retry_is_used(cfg, tmp_path):
+    from curator2.pipeline import run
+    bad = [dict(item(i), extraction_status="redirect_failed", text=None) for i in range(5)]
+    mails = [{"id": "b1", "subject": "beehiiv", "sender_name": "B", "items": bad}]
+    llm = FakeLLM(answers=answers())
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    answers_seq = iter([True, False])
+    r = asyncio.run(run(cfg, src, judge, state, Vault(cfg), github=gh, today=date(2026, 10, 26),
+                        progress=lambda m: None, online=lambda: next(answers_seq)))
+    assert r.status == "onderbroken" and src.moved == []
+    assert state.db.execute("SELECT COUNT(*) FROM failures").fetchone()[0] == 0
+
+
+def test_run_note_shows_mails_held_back(cfg, tmp_path):
+    bad = [dict(item(i), extraction_status="redirect_failed", text=None) for i in range(5)]
+    mails = [{"id": "b1", "subject": "beehiiv", "sender_name": "B", "items": bad}]
+    llm = FakeLLM(answers=answers())
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    go(cfg, state, judge, src, gh, today=date(2026, 10, 26))
+    text = (cfg.root / "Runs" / "2026-10-26.md").read_text(encoding="utf-8")
+    assert "| Mails blijven staan (artikels niet leesbaar) | 1 |" in text
+    assert "[!warning]" in text

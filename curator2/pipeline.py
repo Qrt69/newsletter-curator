@@ -51,10 +51,12 @@ def _book_cost(state: State, judge, run_id: int, month: str):
 
 async def run(cfg: Config, source, judge, state: State, vault: Vault,
               github=None, today: date | None = None,
-              progress: Callable[[str], None] = print) -> RunResult:
+              progress: Callable[[str], None] = print,
+              online: Callable[[], bool] | None = None) -> RunResult:
+    """online: optional check whether the internet works (None: assume it does)."""
     today = today or date.today()
     try:
-        return await _run(cfg, source, judge, state, vault, github, today, progress)
+        return await _run(cfg, source, judge, state, vault, github, today, progress, online)
     finally:
         last = state.db.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         if last:
@@ -62,7 +64,7 @@ async def run(cfg: Config, source, judge, state: State, vault: Vault,
 
 
 async def _run(cfg: Config, source, judge, state: State, vault: Vault, github, today: date,
-               progress: Callable[[str], None]) -> RunResult:
+               progress: Callable[[str], None], online: Callable[[], bool] | None = None) -> RunResult:
     vault.prepare()
     run_id, resumed = state.open_run(today.isoformat())
     run_date = state.run_date(run_id)
@@ -92,7 +94,8 @@ async def _run(cfg: Config, source, judge, state: State, vault: Vault, github, t
             _finish(cfg, state, vault, run_id, run_date, today, c, "geen mails", progress, judge)
             return RunResult("geen mails", "Geen nieuwe mails in 'to qualify'.", c)
         progress(f"{len(emails)} mails gevonden.")
-        built = await _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress)
+        built = await _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress,
+                                  online)
         if isinstance(built, RunResult):
             return built
         rows = built
@@ -144,7 +147,30 @@ MAIL_RETRIES = 3   # a mail whose articles cannot be read is held back this many
 ITEM_RETRIES = 3   # an item the model cannot judge is retried this many nights
 
 
-async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress):
+def _offline(vault: Vault, run_date: str, c: dict, progress) -> RunResult:
+    """No internet (e.g. a hotel wifi that still wants a login): touch nothing, try again later.
+
+    The run stays open, so it does not count as tonight's run: the hourly evening
+    retries pick it up, and no mail uses up one of its retries."""
+    msg = ("Geen internet: de mails konden opgehaald worden, maar geen enkele website. "
+           "Er is niets verwerkt en er zijn geen mails verplaatst; de volgende run probeert het opnieuw.")
+    progress(msg)
+    vault.write_notice(run_date, "geen internet",
+                       "\n".join(["---", f"datum: {run_date}", "status: geen internet", "tags:",
+                                  "  - curator/run", "---", "", f"# Run van {run_date}: geen internet", "",
+                                  f"Laatste poging: {time.strftime('%Y-%m-%d %H:%M')}.", "",
+                                  f"{c.get('mails', 0)} mails gevonden in 'to qualify', maar geen enkele website "
+                                  "was bereikbaar (bijvoorbeeld wifi waar je nog moet inloggen). Er is niets "
+                                  "verwerkt en er zijn geen mails verplaatst. De avondrun probeert het elk uur "
+                                  "opnieuw; lukt het vanavond niet meer, dan neemt de volgende avond ze mee.", ""]))
+    return RunResult("onderbroken", msg, c)
+
+
+async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, c, progress, online=None):
+    run_date = state.run_date(run_id)
+    if online is not None and not online():
+        return _offline(vault, run_date, c, progress)
+    checked_online = False
     # Read every link (cached per email for a resumed run).
     raw: list[tuple[dict, str]] = []  # (item, source name)
     ok_emails: list[str] = []
@@ -168,6 +194,13 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
                                 for it in failed)
                 log.info("Niet leesbaar in '%s': %s", e.get("subject", "")[:60],
                          ", ".join(f"{k} x{v}" for k, v in hosts.most_common(6)))
+            if len(counted) >= 4 and bad / len(counted) > 0.5:
+                # The connection may have dropped since the start: check once before a mail
+                # uses up one of its retries.
+                if online is not None and not checked_online:
+                    checked_online = True
+                    if not online():
+                        return _offline(vault, run_date, c, progress)
             if len(counted) >= 4 and bad / len(counted) > 0.5 and state.bump_failure("mail:" + e["id"]) < MAIL_RETRIES:
                 progress(f"  {bad} van {len(counted)} artikels niet leesbaar; de mail blijft staan "
                          "en wordt morgen opnieuw geprobeerd.")
@@ -420,9 +453,16 @@ def summary_text(run_date: str, c: dict, patterns: list, status: str) -> str:
     lines = [
         "---", f"datum: {run_date}", f"status: {status}", "tags:", "  - curator/run", "---", "",
         f"# Run van {run_date}", "",
+        *([f"> [!warning] Geen enkele mail verwerkt: de artikels van alle {c['mails']} mails waren niet leesbaar. "
+           "Ze blijven in 'to qualify' staan en worden de volgende avond opnieuw geprobeerd.", ""]
+          if c.get("mails") and c.get("mails_overgeslagen", 0) >= c["mails"] else
+          [f"> [!note] {c['mails_overgeslagen']} van de {c['mails']} mails blijven staan omdat hun artikels "
+           "niet leesbaar waren; ze worden de volgende avond opnieuw geprobeerd.", ""]
+          if c.get("mails_overgeslagen") else []),
         f"**{kept} bewaard**, {c.get('verworpen', 0)} verworpen, {c.get('dubbel', 0)} dubbels overgeslagen.", "",
         "| | Aantal |", "| --- | --- |",
         f"| Mails | {c.get('mails', 0)} |",
+        f"| Mails blijven staan (artikels niet leesbaar) | {c.get('mails_overgeslagen', 0)} |",
         f"| Items in de mails | {c.get('items', 0)} |",
         f"| Dubbels (al gezien) | {c.get('dubbel', 0)} |",
         f"| Door vaste regels verworpen | {c.get('regels', 0)} |",

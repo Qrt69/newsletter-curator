@@ -245,6 +245,12 @@ class Vault:
         return removed
 
     # ── run summary ─────────────────────────────────────────────
+    def write_notice(self, run_date: str, label: str, text: str) -> Path:
+        """One note per day and kind (e.g. 'geen internet'), overwritten by later attempts."""
+        path = self.runs_dir / f"{run_date} {label}.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
     def write_summary(self, run_date: str, text: str) -> Path:
         path = self.runs_dir / f"{run_date}.md"
         n = 2

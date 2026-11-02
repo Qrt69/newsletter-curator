@@ -3,7 +3,7 @@
 
 [osk]
 # De vault zelf (de map waarin .obsidian staat) en de submap waarin de curator schrijft.
-vault = 'F:\Obsidian\QRT-Obsidian'
+vault = 'C:\Users\KurtFarasyn\Obsidian\QRT-Obsidian'
 map = "Curator"
 
 [selectie]
