@@ -33,7 +33,9 @@ The reader:
 
 Answer in JSON with exactly these fields:
 - title: a clean, short name for the item (product, library, model or article title).
-- description_nl: two short sentences in Dutch saying what it is and what it is good for.
+- description_nl: two short sentences in Dutch saying what it is and what it is good for, \
+in your own words. Never copy the link text. If the page text is missing, describe it \
+from the title, the site and what you know about it.
 - category: the key of the category that fits best (choose by what the item IS):
 {categories}
 - new_category: empty string, or a short Dutch name when none of the categories fits at all.
@@ -150,6 +152,13 @@ def _pick(v, allowed: list[str], default: str) -> str:
     return default
 
 
+def _thin(text: str, item: dict) -> bool:
+    """Too short to describe anything, or just the link text repeated."""
+    t = (text or "").strip()
+    link = _safe(item.get("link_text")).strip().lower()
+    return len(t) < 25 or len(t.split()) < 4 or (bool(link) and t.lower().strip(".!") == link)
+
+
 def clean_answers(a: dict, categories: list[str], item: dict) -> dict:
     """Coerce whatever the model returned into the expected shape."""
     cat = str(a.get("category") or "").strip().lower()
@@ -162,9 +171,14 @@ def clean_answers(a: dict, categories: list[str], item: dict) -> dict:
     fit = max(1, min(5, fit))
     title = _safe(a.get("title")) or _safe(item.get("title") or item.get("link_text")) or "Zonder titel"
     new_cat = a.get("new_category")
+    desc = _safe(a.get("description_nl"))
+    if _thin(desc, item):
+        # e.g. "test" when the page itself gave nothing and the model echoed the link text
+        page = _safe(item.get("description"))
+        desc = page if not _thin(page, item) else _safe(a.get("reason_nl"))
     return {
         "title": title[:150],
-        "description_nl": _safe(a.get("description_nl"))[:600],
+        "description_nl": desc[:600],
         "category": cat,
         "new_category": (_safe(new_cat)[:60] or None) if new_cat else None,
         "kind": _pick(a.get("kind"), KINDS, "other"),

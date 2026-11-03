@@ -228,3 +228,16 @@ def test_run_note_shows_mails_held_back(cfg, tmp_path):
     text = (cfg.root / "Runs" / "2026-10-26.md").read_text(encoding="utf-8")
     assert "| Mails blijven staan (artikels niet leesbaar) | 1 |" in text
     assert "[!warning]" in text
+
+
+def test_thin_description_is_replaced():
+    from curator2.judge import clean_answers
+    item = {"link_text": "test", "description": "Independent comparison of AI models on quality, speed and price."}
+    a = clean_answers({"title": "Leaderboard", "description_nl": "test", "reason_nl": "Een zin."},
+                      ["article"], item)
+    assert a["description_nl"] == item["description"]
+    a = clean_answers({"title": "L", "description_nl": "test", "reason_nl": "Live ranglijst die modellen vergelijkt."},
+                      ["article"], {"link_text": "test"})
+    assert a["description_nl"].startswith("Live ranglijst")
+    good = "Een live ranglijst die taalmodellen vergelijkt op kwaliteit en prijs."
+    assert clean_answers({"description_nl": good}, ["article"], {})["description_nl"] == good
