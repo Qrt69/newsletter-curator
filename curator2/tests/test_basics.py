@@ -80,3 +80,24 @@ def test_finished_today(tmp_path):
     s.db.execute("UPDATE runs SET finished = ? WHERE id = ?",
                  (time.mktime(time.strptime(time.strftime("%Y-%m-%d") + " 20:30", "%Y-%m-%d %H:%M")), rid))
     assert s.finished_today(time.strftime("%Y-%m-%d"), from_hour=18)
+
+
+def test_catch_up_run_silences_the_hourly_repeats_until_evening(tmp_path):
+    import time
+    from datetime import datetime
+    from curator2.__main__ import skip_scheduled
+    from curator2.state import State
+    s = State(tmp_path / "s.sqlite")
+    day = time.strftime("%Y-%m-%d")
+    at = lambda hm: datetime.strptime(f"{day} {hm}", "%Y-%m-%d %H:%M")
+    assert skip_scheduled(s, at("12:38")) == ""            # missed evening run: catch up
+    rid, _ = s.open_run(day)
+    s.finish_run(rid, "klaar", {})
+    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?", (at("12:52").timestamp(), rid))
+    assert skip_scheduled(s, at("13:38"))                   # repeats do nothing
+    assert skip_scheduled(s, at("16:38"))
+    assert skip_scheduled(s, at("20:00")) == ""             # the evening run still runs
+    rid2, _ = s.open_run(day)
+    s.finish_run(rid2, "klaar", {})
+    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?", (at("20:05").timestamp(), rid2))
+    assert skip_scheduled(s, at("21:00"))

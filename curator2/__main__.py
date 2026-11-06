@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date
+from datetime import date, datetime
 import logging
 import os
 import sys
@@ -53,6 +53,21 @@ class _KeepMail:
 EVENING_FROM = 18  # a run that finishes from this hour on counts as the evening run
 
 
+def skip_scheduled(st: "State", now: datetime) -> str:
+    """Why the scheduled run (--avond) should do nothing now; empty string: go ahead.
+
+    The task repeats every hour so a failed evening run (no internet, vault away) is
+    tried again. When Windows catches up a missed evening run during the day, those
+    repeats come along; once that catch-up run has worked, they are pointless until
+    the real evening run at 20:00."""
+    today = now.date().isoformat()
+    if st.finished_today(today, from_hour=EVENING_FROM):
+        return "Avondrun: vanavond al gedaan"
+    if now.hour < EVENING_FROM and st.finished_today(today):
+        return "Inhaalrun: vandaag al gedaan, de volgende run is de avondrun"
+    return ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="curator2")
     ap.add_argument("--vault", help="andere vault-map")
@@ -85,8 +100,9 @@ def main() -> int:
         try:
             # Only an evening run counts: a run Kurt starts himself during the day
             # (to catch up) does not replace the evening run.
-            if st.finished_today(date.today().isoformat(), from_hour=EVENING_FROM):
-                log.info("Avondrun: vanavond al gedaan")
+            why = skip_scheduled(st, datetime.now())
+            if why:
+                log.info(why)
                 return 0
         finally:
             st.close()
