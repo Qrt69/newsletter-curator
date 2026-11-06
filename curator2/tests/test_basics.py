@@ -82,22 +82,30 @@ def test_finished_today(tmp_path):
     assert s.finished_today(time.strftime("%Y-%m-%d"), from_hour=18)
 
 
-def test_catch_up_run_silences_the_hourly_repeats_until_evening(tmp_path):
-    import time
+def test_scheduled_run_window_20_to_8(tmp_path):
     from datetime import datetime
     from curator2.__main__ import skip_scheduled
     from curator2.state import State
     s = State(tmp_path / "s.sqlite")
-    day = time.strftime("%Y-%m-%d")
-    at = lambda hm: datetime.strptime(f"{day} {hm}", "%Y-%m-%d %H:%M")
-    assert skip_scheduled(s, at("12:38")) == ""            # missed evening run: catch up
-    rid, _ = s.open_run(day)
-    s.finish_run(rid, "klaar", {})
-    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?", (at("12:52").timestamp(), rid))
-    assert skip_scheduled(s, at("13:38"))                   # repeats do nothing
-    assert skip_scheduled(s, at("16:38"))
-    assert skip_scheduled(s, at("20:00")) == ""             # the evening run still runs
-    rid2, _ = s.open_run(day)
-    s.finish_run(rid2, "klaar", {})
-    s.db.execute("UPDATE runs SET finished = ? WHERE id = ?", (at("20:05").timestamp(), rid2))
-    assert skip_scheduled(s, at("21:00"))
+    at = lambda txt: datetime.strptime(txt, "%Y-%m-%d %H:%M")
+
+    def worked(when):
+        rid, _ = s.open_run(when[:10])
+        s.finish_run(rid, "klaar", {})
+        s.db.execute("UPDATE runs SET finished = ? WHERE id = ?", (at(when).timestamp(), rid))
+
+    # outside the window: Windows' catch-up the next afternoon does nothing
+    assert skip_scheduled(s, at("2026-11-06 12:38"))
+    assert skip_scheduled(s, at("2026-11-06 19:59"))
+    # laptop switched on at 20:25: go
+    assert skip_scheduled(s, at("2026-11-06 20:25")) == ""
+    # a failed evening keeps trying after midnight, until 08:00
+    assert skip_scheduled(s, at("2026-11-07 03:00")) == ""
+    assert skip_scheduled(s, at("2026-11-07 07:59")) == ""
+    assert skip_scheduled(s, at("2026-11-07 08:00"))
+    # once one run in the window worked, the rest of the night does nothing
+    worked("2026-11-07 03:10")
+    assert skip_scheduled(s, at("2026-11-07 04:00"))
+    # a run started by hand during the day does not replace the evening run
+    worked("2026-11-07 14:00")
+    assert skip_scheduled(s, at("2026-11-07 20:00")) == ""

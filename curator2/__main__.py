@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import logging
 import os
 import sys
@@ -50,21 +50,32 @@ class _KeepMail:
         self.src.close()
 
 
-EVENING_FROM = 18  # a run that finishes from this hour on counts as the evening run
+# The daily run has a window: from 20:00 until 08:00 the next morning. The scheduled
+# task starts at 20:00, or as soon as the laptop is on, and repeats every hour; the
+# first run that works in the window is that day's run. Outside the window a
+# scheduled start does nothing (Windows also catches up missed starts the next
+# afternoon): that day simply did not happen, and the mails wait for the next window.
+WINDOW_START = 20
+WINDOW_END = 8
+
+
+def window_start(now: datetime) -> datetime | None:
+    """Start of the run window that `now` falls in, or None outside the window."""
+    if now.hour >= WINDOW_START:
+        return now.replace(hour=WINDOW_START, minute=0, second=0, microsecond=0)
+    if now.hour < WINDOW_END:
+        return (now - timedelta(days=1)).replace(hour=WINDOW_START, minute=0, second=0, microsecond=0)
+    return None
 
 
 def skip_scheduled(st: "State", now: datetime) -> str:
-    """Why the scheduled run (--avond) should do nothing now; empty string: go ahead.
-
-    The task repeats every hour so a failed evening run (no internet, vault away) is
-    tried again. When Windows catches up a missed evening run during the day, those
-    repeats come along; once that catch-up run has worked, they are pointless until
-    the real evening run at 20:00."""
-    today = now.date().isoformat()
-    if st.finished_today(today, from_hour=EVENING_FROM):
-        return "Avondrun: vanavond al gedaan"
-    if now.hour < EVENING_FROM and st.finished_today(today):
-        return "Inhaalrun: vandaag al gedaan, de volgende run is de avondrun"
+    """Why the scheduled run (--avond) should do nothing now; empty string: go ahead."""
+    start = window_start(now)
+    if start is None:
+        return (f"Geplande run: buiten het venster ({WINDOW_START}:00 tot {WINDOW_END}:00), "
+                "niets gedaan; de volgende kans is om 20:00")
+    if st.finished_since(start.timestamp()):
+        return "Geplande run: in dit venster al gelukt"
     return ""
 
 
@@ -108,7 +119,7 @@ def main() -> int:
             st.close()
     if not cfg.vault.exists():
         progress(f"De vault {cfg.vault} is niet bereikbaar (externe schijf niet aangesloten?). "
-                 "De avondrun probeert het elk uur opnieuw tot middernacht.")
+                 "De geplande run probeert het elk uur opnieuw tot 8 uur 's morgens.")
         return 2
     if not (cfg.vault / ".obsidian").is_dir():
         progress(f"{cfg.vault} is geen Obsidian-vault (er staat geen .obsidian-map in). "

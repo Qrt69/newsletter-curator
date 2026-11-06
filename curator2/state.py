@@ -82,6 +82,12 @@ class State:
         self.db.commit()
         return cur.lastrowid, False
 
+    def finished_since(self, since: float) -> bool:
+        """A run finished (worked) at or after this moment (unix time)."""
+        return self.db.execute(
+            "SELECT 1 FROM runs WHERE status IN ('klaar', 'geen mails') AND finished >= ?",
+            (since,)).fetchone() is not None
+
     def finished_today(self, today: str, from_hour: int = 0) -> bool:
         """A run finished on this day at or after from_hour (local time)."""
         return self.db.execute(

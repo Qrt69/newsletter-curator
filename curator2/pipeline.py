@@ -162,7 +162,7 @@ def _offline(vault: Vault, run_date: str, c: dict, progress) -> RunResult:
                                   f"{c.get('mails', 0)} mails gevonden in 'to qualify', maar geen enkele website "
                                   "was bereikbaar (bijvoorbeeld wifi waar je nog moet inloggen). Er is niets "
                                   "verwerkt en er zijn geen mails verplaatst. De avondrun probeert het elk uur "
-                                  "opnieuw; lukt het vanavond niet meer, dan neemt de volgende avond ze mee.", ""]))
+                                  "opnieuw tot 8 uur 's morgens; lukt het niet meer, dan neemt de volgende avond ze mee.", ""]))
     return RunResult("onderbroken", msg, c)
 
 
