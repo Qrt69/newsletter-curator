@@ -341,7 +341,17 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
 
     # Lanes and the best share of the regular items.
     rank.assign_lanes(cands, cfg)
-    keep: list[Candidate] = [cd for cd in cands if cd.lane in ("topper", "repo")]
+    keep: list[Candidate] = []
+    for cd in cands:
+        if cd.lane == "topper":
+            keep.append(cd)
+        elif cd.lane == "repo":
+            # Repos are kept for the weekly review, except the ones that plainly do not fit.
+            if cd.answers.get("fits") == "nee":
+                reject(cd.item, cd.key, cd.answers, "repo past niet",
+                       f"{cd.answers.get('reason_nl', '')} ({cd.score:g} punten)".strip())
+            else:
+                keep.append(cd)
     regular = rank.order([cd for cd in cands if cd.lane == "gewoon"])
     quota = rank.quota(len(regular), cfg)
     kept_regular = 0

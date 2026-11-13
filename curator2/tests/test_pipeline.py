@@ -223,3 +223,20 @@ def test_same_title_behind_other_link_is_a_duplicate(cfg, tmp_path):
     state2, judge2, src2, _ = make(cfg, tmp_path / "s2", llm2, mails2)
     res2 = go(cfg, state2, judge2, src2, gh, today=date(2026, 10, 27))
     assert res2.counts["dubbel"] == 1 and len(notes(cfg)) == 1
+
+
+def test_repo_that_does_not_fit_goes_to_rejected(cfg, tmp_path):
+    items = [item(1, url="https://github.com/craft/embroidery", link_text="embroidery repo"),
+             item(2, url="https://github.com/small/toy", link_text="toy repo")]
+    mails = [{"id": "m1", "subject": "TAAFT", "sender_name": "TAAFT", "items": items}]
+    llm = FakeLLM(answers={
+        "embroidery repo": {"kind": "repo", "usable": "ja", "fits": "nee", "fit": 1, "title": "Embroidery"},
+        "toy repo": {"kind": "repo", "usable": "ja", "fits": "deels", "fit": 2, "title": "Toy"}})
+    state, judge, src, gh = make(cfg, tmp_path, llm, mails)
+    res = go(cfg, state, judge, src, gh)
+    assert res.status == "klaar", res.message
+    assert res.counts["repos"] == 1
+    n = notes(cfg)
+    assert "Toy" in n and "Embroidery" not in n
+    rej = (cfg.root / "Verworpen" / "2026-10-26.md").read_text(encoding="utf-8")
+    assert "## repo past niet (1)" in rej and "Embroidery" in rej
