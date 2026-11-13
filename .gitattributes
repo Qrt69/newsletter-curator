@@ -1,0 +1,3 @@
+# Tekstbestanden staan op GitHub altijd met LF-regeleindes, wat de pc er ook van maakt.
+# Zo meldt git geen wijzigingen die alleen uit regeleindes bestaan.
+* text=auto

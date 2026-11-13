@@ -26,6 +26,9 @@ patroon_drempel = 5
 # Een repo telt pas als topper als hij actief en volwassen genoeg is.
 min_sterren = 50
 max_dagen_stil = 180
+# Een lokaal model telt pas als topper als het op je grafische kaart past (in GB).
+# Verhoog dit getal zodra je een zwaardere pc hebt.
+max_geheugen_gb = 16
 
 [lmstudio]
 adres = "http://127.0.0.1:1234/v1"

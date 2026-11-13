@@ -57,6 +57,27 @@ def test_topper_needs_live_repo(cfg):
     assert article.lane == "gewoon"
 
 
+def test_local_model_topper_must_fit_the_graphics_card(cfg):
+    ans = {"usable": "ja", "fits": "ja", "junk": "nee", "fit": 4, "topper": "ja", "kind": "local_model"}
+
+    def model(key, url, title):
+        return Candidate(item={"resolved_url": url}, key=key, answers=dict(ans, title=title), is_model=True)
+
+    huge = model("k1", "https://huggingface.co/openai/gpt-oss-120b", "openai/gpt-oss-120b")
+    moe = model("k2", "https://huggingface.co/Qwen/Qwen3-235B-A22B", "Qwen3-235B-A22B")
+    fits = model("k3", "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF", "Qwen3.8-27B")
+    tiny = model("k4", "https://huggingface.co/x/Qwen3.5-0.8B", "Qwen3.5-0.8B")
+    unknown = model("k5", "https://huggingface.co/x/some-model", "Some Model")
+    repo = Candidate(item={"resolved_url": "https://github.com/x/tool-120b"}, key="k6",
+                     answers=dict(ans, kind="repo", title="tool"), is_repo=True,
+                     repo_meta={"stars": 500, "days_idle": 3, "archived": False})
+    assign_lanes([huge, moe, fits, tiny, unknown, repo], cfg)
+    assert huge.lane == "gewoon" and moe.lane == "gewoon"
+    assert fits.lane == "topper" and tiny.lane == "topper"
+    assert unknown.lane == "topper"   # size not in the name: trust the model's answer
+    assert repo.lane == "topper"      # the limit is only for models
+
+
 def test_beehiiv_and_newsletter_tracking_is_removed():
     a = normalize("https://wisprflow.ai/notetaker?utm_source=beehiiv&_bhiiv=opp_1&bhcl_id=x&_bhlid=abc")
     b = normalize("https://wisprflow.ai/notetaker?utm_source=superhuman&dub_id=q&shad=1&_bhlid=def")

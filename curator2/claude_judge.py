@@ -85,7 +85,8 @@ class ClaudeJudge:
         text = (item.get("text") or "")[: self.cfg.max_text] or \
             "[geen artikeltekst beschikbaar — oordeel op titel, link en linktekst]"
         system = SYSTEM.format(profile=self.cfg.profile, categories=category_lines(self.cfg),
-                               kinds=", ".join(KINDS))
+                               kinds=", ".join(KINDS),
+                               max_gb=f"{self.cfg.topper_max_memory_gb:g}")
         user = USER.format(
             url=item.get("resolved_url") or item.get("source_url") or "",
             link_text=item.get("link_text") or "", title=item.get("title") or "",

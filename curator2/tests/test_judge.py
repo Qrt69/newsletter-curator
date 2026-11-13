@@ -44,7 +44,9 @@ def test_base_file_is_valid_yaml():
 
 def test_prompt_explains_each_category(cfg):
     from curator2.judge import SYSTEM, KINDS, category_lines
-    text = SYSTEM.format(profile="p", categories=category_lines(cfg), kinds=", ".join(KINDS))
+    text = SYSTEM.format(profile="p", categories=category_lines(cfg), kinds=", ".join(KINDS),
+                         max_gb="16")
+    assert "16 GB graphics" in text
     assert "model_release: an AI model itself" in text
     assert "ai_tool: a finished AI product" in text and "NOT a model itself" in text
     assert "coding_tool: an AI assistant for people who write and read code" in text

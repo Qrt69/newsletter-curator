@@ -65,6 +65,7 @@ class Config:
     pattern_threshold: int
     topper_min_stars: int
     topper_max_idle_days: int
+    topper_max_memory_gb: float
     llm_url: str
     llm_model: str
     llm_timeout: int
@@ -123,6 +124,7 @@ def load(cfg_dir: Path | None = None, vault_override: Path | None = None) -> Con
         pattern_threshold=int(s["verworpen"].get("patroon_drempel", 5)),
         topper_min_stars=int(s["topper"].get("min_sterren", 50)),
         topper_max_idle_days=int(s["topper"].get("max_dagen_stil", 180)),
+        topper_max_memory_gb=float(s["topper"].get("max_geheugen_gb", 16)),
         llm_url=s["lmstudio"].get("adres", "http://127.0.0.1:1234/v1"),
         llm_model=s["lmstudio"].get("model", ""),
         llm_timeout=int(s["lmstudio"].get("timeout", 180)),

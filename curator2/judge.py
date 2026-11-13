@@ -49,7 +49,9 @@ method with steps); "nee" if it is only news, opinion or a launch announcement.
 - junk: "ja" if it is consumer fluff, a thin AI wrapper, marketing without substance, \
 or far too basic; otherwise "nee".
 - topper: "ja" only if it is a repo or local model the reader could install and use \
-right away for his own work; otherwise "nee". This should be rare.
+right away for his own work; otherwise "nee". This should be rare. A local model (or a \
+tool that needs one) only counts if it runs on his own PC with a {max_gb} GB graphics \
+card, compressed if needed; anything bigger is "nee".
 - fit: 1 to 5, how well it fits the reader overall (5 = exactly his kind of thing).
 - reason_nl: one Dutch sentence explaining your answers."""
 
@@ -304,6 +306,7 @@ class Judge:
             profile=self.cfg.profile,
             categories=category_lines(self.cfg),
             kinds=", ".join(KINDS),
+            max_gb=f"{self.cfg.topper_max_memory_gb:g}",
         )
         user = USER.format(
             url=item.get("resolved_url") or item.get("source_url") or "",
