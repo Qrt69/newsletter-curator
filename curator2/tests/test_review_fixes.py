@@ -25,7 +25,7 @@ def test_upgraded_item_is_not_upgraded_again_after_rerender(cfg, tmp_path):
     llm = FakeLLM(answers=answers())
     state, judge, src, gh = make(cfg, tmp_path, llm, build_mail())
     go(cfg, state, judge, src, gh)
-    lst = cfg.root / "Verworpen" / "2026-10-26.md"
+    lst = cfg.root / "Verworpen" / "Verworpen 2026-10-26.md"
     tick(lst, "Article 3")
     go(cfg, state, judge, FakeSource([]), gh, today=date(2026, 10, 27))
     note = cfg.root / "Items" / "Article 3.md"
@@ -181,7 +181,7 @@ def test_weak_items_are_not_kept_just_to_fill_the_quota(cfg, tmp_path):
     state, judge, src, gh = make(cfg, tmp_path, llm, mails)
     res = go(cfg, state, judge, src, gh)
     assert res.counts["gewoon_bewaard"] == 1
-    rej = (cfg.root / "Verworpen" / "2026-10-26.md").read_text(encoding="utf-8")
+    rej = (cfg.root / "Verworpen" / "Verworpen 2026-10-26.md").read_text(encoding="utf-8")
     assert "## onder de ondergrens (1)" in rej
 
     cfg.min_points = 99
@@ -201,7 +201,7 @@ def test_no_internet_touches_nothing_and_keeps_the_run_open(cfg, tmp_path):
     r = asyncio.run(run(cfg, src, judge, state, Vault(cfg), github=gh, today=date(2026, 10, 26),
                         progress=lambda m: None, online=lambda: False))
     assert r.status == "onderbroken" and src.moved == []
-    assert (cfg.root / "Runs" / "2026-10-26 geen internet.md").exists()
+    assert (cfg.root / "Runs" / "Curator run 2026-10-26 geen internet.md").exists()
     assert not state.finished_today("2026-10-26")
     assert state.db.execute("SELECT COUNT(*) FROM failures").fetchone()[0] == 0
 
@@ -225,7 +225,7 @@ def test_run_note_shows_mails_held_back(cfg, tmp_path):
     llm = FakeLLM(answers=answers())
     state, judge, src, gh = make(cfg, tmp_path, llm, mails)
     go(cfg, state, judge, src, gh, today=date(2026, 10, 26))
-    text = (cfg.root / "Runs" / "2026-10-26.md").read_text(encoding="utf-8")
+    text = (cfg.root / "Runs" / "Curator run 2026-10-26.md").read_text(encoding="utf-8")
     assert "| Mails blijven staan (artikels niet leesbaar) | 1 |" in text
     assert "[!warning]" in text
 
@@ -241,3 +241,22 @@ def test_thin_description_is_replaced():
     assert a["description_nl"].startswith("Live ranglijst")
     good = "Een live ranglijst die taalmodellen vergelijkt op kwaliteit en prijs."
     assert clean_answers({"description_nl": good}, ["article"], {})["description_nl"] == good
+
+
+def test_old_date_names_get_a_prefix(cfg):
+    """A bare <date>.md clashes with the journal's daily notes; old files are renamed once."""
+    v = Vault(cfg)
+    v.prepare()
+    (v.runs_dir / "2026-10-26.md").write_text("a", encoding="utf-8")
+    (v.runs_dir / "2026-10-26 (2).md").write_text("b", encoding="utf-8")
+    (v.runs_dir / "2026-10-26 geen internet.md").write_text("c", encoding="utf-8")
+    (v.runs_dir / "Repo-review 2026-10-26.md").write_text("d", encoding="utf-8")
+    (v.rejected_dir / "2026-10-26.md").write_text("e", encoding="utf-8")
+    assert v.rename_old_names() == 4
+    assert sorted(p.name for p in v.runs_dir.glob("*.md")) == [
+        "Curator run 2026-10-26 (2).md", "Curator run 2026-10-26 geen internet.md",
+        "Curator run 2026-10-26.md", "Repo-review 2026-10-26.md"]
+    assert [p.name for p in v.rejected_dir.glob("*.md")] == ["Verworpen 2026-10-26.md"]
+    assert v.rename_old_names() == 0
+    assert v.rejected_path("2026-10-26").name == "Verworpen 2026-10-26.md"
+    assert v.write_summary("2026-10-26", "x").name == "Curator run 2026-10-26 (3).md"

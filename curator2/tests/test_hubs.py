@@ -19,7 +19,7 @@ def test_items_link_to_category_notes_with_live_overview(cfg, tmp_path):
     assert yaml.safe_load(block)["views"][0]["name"] == "Python-bibliotheken"
     start = (cfg.root / "Curator.md").read_text(encoding="utf-8")
     assert "[[Curator/Categorieën/Python-bibliotheken|Python-bibliotheken]] (1)" in start
-    assert "[[Curator/Runs/2026-10-26|2026-10-26]]" in start
+    assert "[[Curator/Runs/Curator run 2026-10-26|Curator run 2026-10-26]]" in start
 
 
 def test_old_notes_are_converted_and_shared_subjects_get_a_note(cfg, tmp_path):

@@ -30,6 +30,11 @@ def _slug(name: str) -> str:
     return slug(name)
 
 
+def _date_key(p: Path) -> tuple[str, str]:
+    m = re.search(r"\d{4}-\d{2}-\d{2}", p.stem)
+    return (m.group(0) if m else "", p.stem)
+
+
 def link(folder: str, sub: str, name: str) -> str:
     return f"[[{folder}/{sub}/{_slug(name)}|{name}]]"
 
@@ -172,7 +177,8 @@ def _write_start(root: Path, folder: str, cats: Counter, shared: dict[str, int])
         for name, n in sorted(shared.items(), key=lambda x: (-x[1], x[0].lower())):
             lines.append(f"- {link(folder, TOPIC_DIR, name)} ({n})")
     for title, sub in (("Laatste runs", "Runs"), ("Verworpen", "Verworpen")):
-        files = sorted((root / sub).glob("*.md"), reverse=True)[:5] if (root / sub).exists() else []
+        # newest first by the date in the name, whatever the prefix (run, repo-review, ...)
+        files = sorted((root / sub).glob("*.md"), key=_date_key, reverse=True)[:5] if (root / sub).exists() else []
         if files:
             lines += ["", f"## {title}", ""]
             lines += [f"- [[{folder}/{sub}/{f.stem}|{f.stem}]]" for f in files]

@@ -109,8 +109,10 @@ Reuses `src/email` (Graph fetcher, extractor, BrowserPool) unchanged.
 - The model never scores: it answers fixed questions (`judge.py`); points come from
   `config/beoordeling.toml`. Kurt edits the three TOML files, not code.
 - OSK output under `<vault>/Curator/`: `Items/` (one note per kept item, properties for
-  Bases), `Curator.base` (written once, never overwritten), `Verworpen/<date>.md` (tick
-  boxes with `%%rid:..%%`; removed after 90 days), `Runs/<date>.md`.
+  Bases), `Curator.base` (written once, never overwritten), `Verworpen/Verworpen <date>.md`
+  (tick boxes with `%%rid:..%%`; removed after 90 days), `Runs/Curator run <date>.md`.
+  Never a bare `<date>.md`: that name belongs to the journal's daily notes (changed
+  2026-11-18; `Vault.prepare` renames old files).
 - State: SQLite in `%LOCALAPPDATA%\curator2\curator2.sqlite`, log next to it. An
   unfinished run (status `bezig`) is resumed by the next start.
 - Judge: `[beoordelaar] soort` = `claude` (default since 2026-10-27, `claude_judge.py`) or

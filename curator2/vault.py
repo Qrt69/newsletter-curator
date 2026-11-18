@@ -3,8 +3,11 @@ Everything written into OSK, under <vault>/<map>/:
 
   Items/<titel>.md        one note per kept item, with properties for Bases
   Curator.base            the views (newest, per category, Om te gebruiken, Repo-review)
-  Verworpen/<datum>.md    one list per run, a tick box per rejected item
-  Runs/<datum>.md         a short summary per run
+  Verworpen/Verworpen <datum>.md   one list per run, a tick box per rejected item
+  Runs/Curator run <datum>.md      a short summary per run
+
+The names carry a prefix because a bare <datum>.md clashes with the daily notes of
+the journal (40 Journal), which own that name.
 """
 
 from __future__ import annotations
@@ -22,6 +25,10 @@ from .urls import clean, normalize, unwrap
 _BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f#^\[\]]')
 _RID = re.compile(r"%%rid:([0-9a-f]{10})%%")
 _TICKED = re.compile(r"^\s*-\s*\[[xX]\]\s")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_OLD_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}( .*)?$")  # names from before 2026-11-18
+RUN_PREFIX = "Curator run"
+REJECTED_PREFIX = "Verworpen"
 
 
 def rid_for(key: str) -> str:
@@ -76,6 +83,23 @@ class Vault:
         base = self.root / "Curator.base"
         if not base.exists():  # never overwrite views Kurt may have changed
             base.write_text(BASE_FILE.replace("{folder}", self.cfg.folder), encoding="utf-8")
+        self.rename_old_names()
+
+    def rename_old_names(self) -> int:
+        """Lists and summaries once named '<datum>.md' get their prefix. Safe to repeat."""
+        renamed = 0
+        for folder, prefix in ((self.runs_dir, RUN_PREFIX), (self.rejected_dir, REJECTED_PREFIX)):
+            if not folder.exists():
+                continue
+            for p in sorted(folder.glob("*.md")):
+                if not _OLD_NAME.match(p.stem):
+                    continue
+                target = p.with_name(f"{prefix} {p.stem}.md")
+                if target.exists():
+                    continue
+                p.rename(target)
+                renamed += 1
+        return renamed
 
     def refresh_hubs(self) -> dict:
         return hubs.refresh(self.root, self.cfg.folder)
@@ -175,7 +199,7 @@ class Vault:
 
     # ── rejected lists ──────────────────────────────────────────
     def rejected_path(self, run_date: str) -> Path:
-        return self.rejected_dir / f"{run_date}.md"
+        return self.rejected_dir / f"{REJECTED_PREFIX} {run_date}.md"
 
     def write_rejected(self, run_date: str, entries: list[dict]):
         """entries: {rid, title, url, reason, source}. Rewritten whole on a resumed run."""
@@ -235,8 +259,11 @@ class Vault:
         if not self.rejected_dir.exists():
             return 0
         for p in self.rejected_dir.glob("*.md"):
+            m = _DATE.search(p.stem)
+            if not m:
+                continue
             try:
-                d = datetime.strptime(p.stem[:10], "%Y-%m-%d").date()
+                d = datetime.strptime(m.group(0), "%Y-%m-%d").date()
             except ValueError:
                 continue
             if d < cutoff:
@@ -247,15 +274,15 @@ class Vault:
     # ── run summary ─────────────────────────────────────────────
     def write_notice(self, run_date: str, label: str, text: str) -> Path:
         """One note per day and kind (e.g. 'geen internet'), overwritten by later attempts."""
-        path = self.runs_dir / f"{run_date} {label}.md"
+        path = self.runs_dir / f"{RUN_PREFIX} {run_date} {label}.md"
         path.write_text(text, encoding="utf-8")
         return path
 
     def write_summary(self, run_date: str, text: str) -> Path:
-        path = self.runs_dir / f"{run_date}.md"
+        path = self.runs_dir / f"{RUN_PREFIX} {run_date}.md"
         n = 2
         while path.exists():
-            path = self.runs_dir / f"{run_date} ({n}).md"
+            path = self.runs_dir / f"{RUN_PREFIX} {run_date} ({n}).md"
             n += 1
         path.write_text(text, encoding="utf-8")
         return path

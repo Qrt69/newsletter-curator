@@ -91,14 +91,14 @@ def test_full_run(cfg, tmp_path):
     base = (cfg.root / "Curator.base").read_text(encoding="utf-8")
     assert 'file.inFolder("Curator/Items")' in base and "Om te gebruiken" in base
 
-    rej = (cfg.root / "Verworpen" / "2026-10-26.md").read_text(encoding="utf-8")
+    rej = (cfg.root / "Verworpen" / "Verworpen 2026-10-26.md").read_text(encoding="utf-8")
     assert "## link naar X (1)" in rej
     assert "zelfde inhoud als Qwen9 A" in rej
     assert "## webinar of evenement (2)" in rej     # word rule + event category
     assert rej.count("- [ ]") == c["verworpen"]
     assert src.moved == ["m1"]
 
-    summary = (cfg.root / "Runs" / "2026-10-26.md").read_text(encoding="utf-8")
+    summary = (cfg.root / "Runs" / "Curator run 2026-10-26.md").read_text(encoding="utf-8")
     assert "**5 bewaard**" in summary
 
 
@@ -143,7 +143,7 @@ def test_ticked_item_is_upgraded_next_run(cfg, tmp_path):
     llm = FakeLLM(answers=answers())
     state, judge, src, gh = make(cfg, tmp_path, llm, build_mail())
     go(cfg, state, judge, src, gh)
-    path = cfg.root / "Verworpen" / "2026-10-26.md"
+    path = cfg.root / "Verworpen" / "Verworpen 2026-10-26.md"
     text = path.read_text(encoding="utf-8")
     line = next(l for l in text.splitlines() if "Article 3" in l)
     text = text.replace(line, line.replace("- [ ]", "- [x]"))
@@ -166,7 +166,7 @@ def test_upgrade_pattern_is_reported(cfg, tmp_path):
     llm = FakeLLM(answers=answers())
     state, judge, src, gh = make(cfg, tmp_path, llm, build_mail())
     go(cfg, state, judge, src, gh)
-    path = cfg.root / "Verworpen" / "2026-10-26.md"
+    path = cfg.root / "Verworpen" / "Verworpen 2026-10-26.md"
     text = path.read_text(encoding="utf-8")
     lines = [l for l in text.splitlines() if re.search(r"Article (\d|1[0-7])\b", l)][:5]
     for l in lines:
@@ -182,9 +182,9 @@ def test_old_rejected_lists_are_removed(cfg, tmp_path):
     llm = FakeLLM(answers=answers())
     state, judge, src, gh = make(cfg, tmp_path, llm, build_mail())
     Vault(cfg).prepare()
-    old = cfg.root / "Verworpen" / "2026-06-01.md"
+    old = cfg.root / "Verworpen" / "Verworpen 2026-06-01.md"
     old.write_text("oud", encoding="utf-8")
-    recent = cfg.root / "Verworpen" / "2026-10-01.md"
+    recent = cfg.root / "Verworpen" / "Verworpen 2026-10-01.md"
     recent.write_text("recent", encoding="utf-8")
     go(cfg, state, judge, FakeSource([]), gh)
     assert not old.exists() and recent.exists()
@@ -238,5 +238,5 @@ def test_repo_that_does_not_fit_goes_to_rejected(cfg, tmp_path):
     assert res.counts["repos"] == 1
     n = notes(cfg)
     assert "Toy" in n and "Embroidery" not in n
-    rej = (cfg.root / "Verworpen" / "2026-10-26.md").read_text(encoding="utf-8")
+    rej = (cfg.root / "Verworpen" / "Verworpen 2026-10-26.md").read_text(encoding="utf-8")
     assert "## repo past niet (1)" in rej and "Embroidery" in rej
