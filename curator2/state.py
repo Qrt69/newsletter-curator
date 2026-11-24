@@ -82,8 +82,10 @@ class State:
         self.db.commit()
         return cur.lastrowid, False
 
-    def unfinished_run(self) -> bool:
-        return self.db.execute("SELECT 1 FROM runs WHERE status = 'bezig'").fetchone() is not None
+    def unfinished_run(self) -> str | None:
+        """The run_date (label) of an unfinished run, or None."""
+        row = self.db.execute("SELECT run_date FROM runs WHERE status = 'bezig' ORDER BY id DESC LIMIT 1").fetchone()
+        return row[0] if row else None
 
     def mark_import(self, run_id: int):
         """A one-off import must not count as the evening's newsletter run."""

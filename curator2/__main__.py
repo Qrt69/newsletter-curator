@@ -171,7 +171,14 @@ def _main(args, cfg, d: Path, log, progress) -> int:
     if args.geen_mails_verplaatsen:
         source = _KeepMail(source)
     state = State(d / "curator2.sqlite")
-    if args.import_file and state.unfinished_run():
+    busy = state.unfinished_run()
+    # An interrupted import is resumed by the same import command; a newsletter run is not.
+    if not args.import_file and busy and "import" in busy:
+        progress(f"De import '{busy}' is onderbroken. Start ze opnieuw met hetzelfde import-commando; "
+                 "de gewone run wacht tot ze klaar is.")
+        state.close()
+        return 3
+    if args.import_file and busy and not busy.endswith(Path(args.import_file).stem):
         progress("Er staat nog een onderbroken run. Start eerst gewoon 'uv run python -m curator2' "
                  "zodat die afgewerkt wordt, en daarna de import.")
         state.close()
@@ -189,6 +196,8 @@ def _main(args, cfg, d: Path, log, progress) -> int:
     gh = GitHub()
     try:
         label = f"{date.today().isoformat()} {Path(args.import_file).stem}" if args.import_file else ""
+        if args.import_file and busy:
+            label = busy
         result = asyncio.run(run(cfg, source, judge, state, Vault(cfg), github=gh, progress=progress,
                                  online=internet_ok, label=label))
         if args.import_file:
