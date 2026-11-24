@@ -240,3 +240,27 @@ def test_repo_that_does_not_fit_goes_to_rejected(cfg, tmp_path):
     assert "Toy" in n and "Embroidery" not in n
     rej = (cfg.root / "Verworpen" / "Verworpen 2026-10-26.md").read_text(encoding="utf-8")
     assert "## repo past niet (1)" in rej and "Embroidery" in rej
+
+
+def test_file_import_items_without_link(cfg, tmp_path):
+    import json
+    from curator2.mailsource import FileSource
+    data = [{"id": "notion:Python Libraries", "subject": "Notion: Python Libraries",
+             "sender_name": "Notion: Python Libraries", "items": [
+                 {"link_text": "cleanlab library", "title": "cleanlab library", "description": "label errors",
+                  "text": "Primary Use: label errors", "resolved_url": "", "source_url": "",
+                  "extraction_status": "ok", "_key": "notion/python-libraries/cleanlab"}]}]
+    f = tmp_path / "notion-import.json"
+    f.write_text(json.dumps(data), encoding="utf-8")
+    llm = FakeLLM(answers={"cleanlab library": {"usable": "ja", "fits": "ja", "fit": 5, "title": "cleanlab"}})
+    state = State(tmp_path / "state.sqlite")
+    judge = Judge(cfg, transport=llm.transport())
+    res = asyncio.run(run(cfg, FileSource(f), judge, state, Vault(cfg), github=None, today=TODAY,
+                          progress=lambda m: None, label="2026-10-26 notion-import"))
+    assert res.status == "klaar", res.message
+    n = notes(cfg)
+    assert "cleanlab" in n and "Open de bron" not in n["cleanlab"]
+    assert 'sleutel: "notion/python-libraries/cleanlab"' in n["cleanlab"]
+    assert (cfg.root / "Runs").exists() and any("notion-import" in p.name for p in (cfg.root / "Runs").glob("*.md"))
+    state.mark_import(state.last_run_id())
+    assert not state.finished_since(0)

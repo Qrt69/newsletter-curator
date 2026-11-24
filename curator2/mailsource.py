@@ -82,3 +82,29 @@ class FakeSource:
 
     def close(self):
         pass
+
+
+class FileSource:
+    """
+    Items prepared in a JSON file instead of mails (one-off imports, such as the
+    old Notion databases): [{'id', 'subject', 'sender_name', 'items': [...]}].
+    Nothing is moved; items without a link carry their own '_key'.
+    """
+
+    def __init__(self, path):
+        import json
+        from pathlib import Path
+
+        self.emails = json.loads(Path(path).read_text(encoding="utf-8"))
+
+    async def fetch(self) -> list[dict]:
+        return [dict(e, body_html="") for e in self.emails]
+
+    def extract(self, email: dict) -> list[dict]:
+        return [dict(i) for i in email["items"]]
+
+    async def move(self, email_id: str):
+        return None
+
+    def close(self):
+        pass

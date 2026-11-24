@@ -83,6 +83,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="curator2")
     ap.add_argument("--vault", help="andere vault-map")
     ap.add_argument("--geen-mails-verplaatsen", action="store_true")
+    ap.add_argument("--import", dest="import_file",
+                    help="eenmalige import: items uit dit JSON-bestand in plaats van mails")
     ap.add_argument("--avond", action="store_true",
                     help="geplande avondrun: niets doen als de run van vanavond al gelukt is")
     args = ap.parse_args()
@@ -106,6 +108,40 @@ def main() -> int:
         log.info(msg)
 
     cfg = config_mod.load(vault_override=Path(args.vault) if args.vault else None)
+    lock = d / "curator2.lock"
+    if not _take_lock(lock):
+        progress("Er draait al een curator-run; deze start doet niets.")
+        return 0
+    try:
+        return _main(args, cfg, d, log, progress)
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def _take_lock(lock: Path, stale_hours: float = 7) -> bool:
+    """One run at a time. A lock older than the longest possible run is left over from a crash."""
+    import time
+    for _ in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > stale_hours * 3600:
+                    lock.unlink()
+                    continue
+            except OSError:
+                continue
+            return False
+    return False
+
+
+def _main(args, cfg, d: Path, log, progress) -> int:
     if args.avond:
         st = State(d / "curator2.sqlite")
         try:
@@ -126,11 +162,20 @@ def main() -> int:
                  "Pas 'vault' aan in instellingen.toml.")
         return 2
 
-    from curator2.mailsource import OutlookSource
-    source = OutlookSource()
+    if args.import_file:
+        from curator2.mailsource import FileSource
+        source = FileSource(args.import_file)
+    else:
+        from curator2.mailsource import OutlookSource
+        source = OutlookSource()
     if args.geen_mails_verplaatsen:
         source = _KeepMail(source)
     state = State(d / "curator2.sqlite")
+    if args.import_file and state.unfinished_run():
+        progress("Er staat nog een onderbroken run. Start eerst gewoon 'uv run python -m curator2' "
+                 "zodat die afgewerkt wordt, en daarna de import.")
+        state.close()
+        return 3
     if cfg.judge_kind == "claude":
         from curator2.claude_judge import ClaudeJudge
         from curator2.judge import LLMUnavailable
@@ -143,8 +188,11 @@ def main() -> int:
         judge = Judge(cfg)
     gh = GitHub()
     try:
+        label = f"{date.today().isoformat()} {Path(args.import_file).stem}" if args.import_file else ""
         result = asyncio.run(run(cfg, source, judge, state, Vault(cfg), github=gh, progress=progress,
-                                 online=internet_ok))
+                                 online=internet_ok, label=label))
+        if args.import_file:
+            state.mark_import(state.last_run_id())
     except Exception:
         log.exception("Run crashed")
         progress("De run is gecrasht; details staan in " + str(d / "curator2.log") +

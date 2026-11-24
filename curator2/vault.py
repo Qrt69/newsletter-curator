@@ -191,7 +191,8 @@ class Vault:
         if answers.get("description_nl"):
             lines.append(answers["description_nl"])
             lines.append("")
-        lines.append(f"[Open de bron]({url})")
+        if url:
+            lines.append(f"[Open de bron]({url})")
         if novelty:
             lines += ["", f"**Voegt toe:** {novelty}"]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -228,7 +229,8 @@ class Vault:
                 src = f" · {one_line(e['source'])}" if e.get("source") else ""
                 why = f" — {one_line(e['why'])}" if e.get("why") else ""
                 done = " · opgewaardeerd" if e.get("upgraded") else ""
-                out.append(f"- [{box}] [{title}]({url}){why}{src}{done} %%rid:{e['rid']}%%")
+                link = f"[{title}]({url})" if url else title
+                out.append(f"- [{box}] {link}{why}{src}{done} %%rid:{e['rid']}%%")
             out.append("")
         path.write_text("\n".join(out), encoding="utf-8")
 

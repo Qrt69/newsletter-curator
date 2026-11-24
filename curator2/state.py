@@ -82,6 +82,18 @@ class State:
         self.db.commit()
         return cur.lastrowid, False
 
+    def unfinished_run(self) -> bool:
+        return self.db.execute("SELECT 1 FROM runs WHERE status = 'bezig'").fetchone() is not None
+
+    def mark_import(self, run_id: int):
+        """A one-off import must not count as the evening's newsletter run."""
+        self.db.execute("UPDATE runs SET status = 'import' WHERE id = ? AND status = 'klaar'", (run_id,))
+        self.db.commit()
+
+    def last_run_id(self) -> int | None:
+        row = self.db.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        return row[0] if row else None
+
     def finished_since(self, since: float) -> bool:
         """A run finished (worked) at or after this moment (unix time)."""
         return self.db.execute(

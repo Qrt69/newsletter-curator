@@ -52,11 +52,14 @@ def _book_cost(state: State, judge, run_id: int, month: str):
 async def run(cfg: Config, source, judge, state: State, vault: Vault,
               github=None, today: date | None = None,
               progress: Callable[[str], None] = print,
-              online: Callable[[], bool] | None = None) -> RunResult:
-    """online: optional check whether the internet works (None: assume it does)."""
+              online: Callable[[], bool] | None = None, label: str = "") -> RunResult:
+    """
+    online: optional check whether the internet works (None: assume it does).
+    label: name for this run's notes instead of the bare date (one-off imports).
+    """
     today = today or date.today()
     try:
-        return await _run(cfg, source, judge, state, vault, github, today, progress, online)
+        return await _run(cfg, source, judge, state, vault, github, today, progress, online, label)
     finally:
         last = state.db.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 1").fetchone()
         if last:
@@ -64,9 +67,10 @@ async def run(cfg: Config, source, judge, state: State, vault: Vault,
 
 
 async def _run(cfg: Config, source, judge, state: State, vault: Vault, github, today: date,
-               progress: Callable[[str], None], online: Callable[[], bool] | None = None) -> RunResult:
+               progress: Callable[[str], None], online: Callable[[], bool] | None = None,
+               label: str = "") -> RunResult:
     vault.prepare()
-    run_id, resumed = state.open_run(today.isoformat())
+    run_id, resumed = state.open_run(label or today.isoformat())
     run_date = state.run_date(run_id)
     c = {"mails": 0, "mails_overgeslagen": 0, "items": 0, "dubbel": 0, "regels": 0,
          "niet_leesbaar": 0, "beoordeeld": 0, "niet_beoordeeld": 0, "toppers": 0, "repos": 0,
@@ -227,7 +231,7 @@ async def _build_plan(cfg, emails, source, judge, state, vault, github, run_id, 
     to_judge: list[tuple[dict, str]] = []
     for it, src in raw:
         url = it.get("resolved_url") or it.get("source_url") or ""
-        key = normalize(url)
+        key = it.get("_key") or normalize(url)  # _key: imported items without a link
         if not key:
             continue
         it["_source"] = src
